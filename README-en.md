@@ -1,320 +1,128 @@
+# gin-kefu Customer Support System
 
-<div align=center>
-<img src="http://qmplusimg.henrongyi.top/gvalogo.jpg" width="300" height="300" />
-</div>
-<div align=center>
-<img src="https://img.shields.io/badge/golang-1.26.10-blue"/>
-<img src="https://img.shields.io/badge/gin-1.9.1-lightBlue"/>
-<img src="https://img.shields.io/badge/vue-3.3.4-brightgreen"/>
-<img src="https://img.shields.io/badge/element--plus-2.3.8-green"/>
-<img src="https://img.shields.io/badge/gorm-1.25.2-red"/>
-</div>
+A **B2B multi-tenant live customer support system** built on top of [gin-vue-admin](https://github.com/flipped-aurora/gin-vue-admin). Once a merchant (tenant) is opened on the platform, it gets its own visitor channel, agent workbench and merchant admin. All four frontends are strictly isolated by `tenant_id`.
 
-English | [简体中文](./README.md)
+## Features
 
-[gitee](https://gitee.com/pixelmax/gin-vue-admin): https://gitee.com/pixelmax/gin-vue-admin
+- **Four login scopes**: visitor H5 (password only), agent workbench / merchant admin / platform admin (password + image captcha + SMS MFA). Each scope has an independent token domain (`scope=member|agent|merchant|platform`); tokens are never interchangeable.
+- **Full conversation lifecycle**: create → pending queue → claim (atomic, with hard limit) → transfer → close, with owner validation.
+- **Realtime message pipeline**: REST send acknowledged by Kafka (`acks=all`) → storage-worker persists to MongoDB asynchronously → ws-gateway broadcasts per conversation. Monotonic in-conversation `seq` allocated atomically in Redis (cold start falls back to the PostgreSQL watermark / max stored Mongo seq).
+- **Conversation lifecycle events**: `created/claimed/transferred/closed` published on a dedicated Kafka topic — the pending count on the workbench updates without refresh, and the H5 automatically switches from "pending" to "connected" once an agent claims.
+- **Targeted unread notifications**: a visitor message notifies only the assigned agent (pending conversations notify the whole tenant to encourage claiming); the workbench splits unread badges per tab, with a sound chime and page-title counter.
+- **Bot welcome message**: merchants configure `welcomeTemplate` on the channel; a bot message is auto-sent when a new conversation is created (idempotent — once per conversation).
+- **Messaging capabilities**: text/image types (whitelist + scanned-attachment validation), idempotent resend via `clientMsgId` (24h), 7-day window for visitors vs. full history for agents, read cursors.
+- **Merchant admin**: per-tenant agent/visitor account CRUD, channel settings (welcome text / domain whitelist), performance reports, audit log.
+- **Platform admin**: tenant provisioning (first merchant admin created in the same transaction), protective deletion (refused while pending/active conversations exist; otherwise soft-deletes tenant and cascades accounts), global overview and audit.
+- **LAN-friendly development**: frontend dev servers bind `0.0.0.0` for on-network testing.
 
-[github](https://github.com/flipped-aurora/gin-vue-admin): https://github.com/flipped-aurora/gin-vue-admin
+## Architecture
 
-# Project Guidelines
-[Online Documentation](https://www.gin-vue-admin.com/) : https://www.gin-vue-admin.com/
+```mermaid
+graph LR
+    H5[Visitor H5<br>chat-web/h5.html] -->|REST+WS| GW
+    WB[Agent Workbench<br>chat-web/workbench.html] -->|REST+WS| GW
+    MW[Merchant Admin<br>merchant-web] -->|REST| SRV
+    PF[Platform Admin<br>web /csPlatform] -->|REST| SRV
 
-[From the environment to the deployment of teaching videos](https://www.bilibili.com/video/BV1fV411y7dT)
-
-[Development Steps](https://www.gin-vue-admin.com/guide/start-quickly/env.html) (Contributor:  <a href="https://github.com/LLemonGreen">LLemonGreen</a> And <a href="https://github.com/fkk0509">Fann</a>)
-
-## Live Demos
-
-- **Demo Site**: [http://demo.gin-vue-admin.com](http://demo.gin-vue-admin.com)
-- **Licensed Edition Demo**: [https://vip.gin-vue-admin.com](https://vip.gin-vue-admin.com)
-- **Demo Username**: `admin`
-- **Demo Password**: `123456`
-
-Explore the [licensed edition demo](https://vip.gin-vue-admin.com) to see the complete experience. For licensed-edition features or official commercial support, [purchase a commercial license](https://plugin.gin-vue-admin.com/license).
-
-## 1. Basic Introduction
-
-### 1.1 Project Introduction
-
-> Gin-vue-admin is a backstage management system based on [vue](https://vuejs.org) and [gin](https://gin-gonic.com), which separates the front and rear of the full stack. It integrates jwt authentication, dynamic routing, dynamic menu, casbin authentication, form generator, code generator and other functions. It provides a variety of sample files, allowing you to focus more time on business development.
-
-### 1.2 Contributing Guide
-
-Hi! Thank you for choosing gin-vue-admin.
-
-Gin-vue-admin is a full-stack (frontend and backend separation) framework for developers, designers and product managers.
-
-We are excited that you are interested in contributing to gin-vue-admin. Before submitting your contribution though, please make sure to take a moment and read through the following guidelines.
-
-#### 1.2.1 Issue Guidelines
-
-- Issues are exclusively for bug reports, feature requests and design-related topics. Other questions may be closed directly. If any questions come up when you are using Element, please hit [Gitter](https://gitter.im/element-en/Lobby) for help.
-
-- Before submitting an issue, please check if similar problems have already been issued.
-
-#### 1.2.2 Pull Request Guidelines
-
-- Fork this repository to your own account. Do not create branches here.
-
-- Commit info should be formatted as `[File Name]: Info about commit.` (e.g. `README.md: Fix xxx bug`)
-
-- <font color=red>Make sure PRs are created to `develop` branch instead of `master` branch.</font>
-
-- If your PR fixes a bug, please provide a description about the related bug.
-
-- Merging a PR takes two maintainers: one approves the changes after reviewing, and then the other reviews and merges.
-
-### 1.3 Version list
-
-- master: 2.0 code, for prod
-- develop: 2.0 dev code, for test
-- [gin-vue-admin_v2_dev](https://github.com/flipped-aurora/gin-vue-admin/tree/gin-vue-admin_v2_dev) (v2.0 [GormV1](https://v1.gorm.io) Stable branch)
-- [gva_gormv2_dev](https://github.com/flipped-aurora/gin-vue-admin/tree/gva_gormv2_dev) (v2.0 [GormV2](https://v2.gorm.io) Development branch)
-
-## 2. Getting started
-
-```
-- node version > v8.6.0
-- golang version >= v1.26.10
-- IDE recommendation: Goland
-- initialization project: different versions of the database are not initialized. See synonyms at initialization https://www.gin-vue-admin.com/docs/first
-- Replace the Qiniuyun public key, private key, warehouse name and default url address in the project to avoid data confusion in the test file.
+    SRV[gva-server :8888] -->|im.message / im.conversation.event| KF[(Kafka)]
+    SRV --> PG[(PostgreSQL<br>accounts/conversations/watermarks/audit)]
+    SRV --> RD[(Redis<br>seq/idempotency/rate-limit/captcha)]
+    KF --> W[storage-worker] --> MG[(MongoDB message store)]
+    KF --> GW[ws-gateway :8889<br>conversation + tenant channels]
 ```
 
-### 2.1 server project
+- **Messages never hit PostgreSQL**: accounts, conversations, read watermarks and audit live in PostgreSQL; message bodies flow through Kafka and are persisted to MongoDB by the worker.
+- **Two Kafka channels**: `im.message` (messages) and `im.conversation.event` (lifecycle events), consumed by ws-gateway in one group and dispatched onto per-conversation and per-tenant WS channels respectively.
+- **No second login for the platform page**: when the GVA super admin is already logged in, opening the CS management page silently exchanges the framework token for a platform token (`POST /cs/platform/exchange`), falling back to in-page MFA on failure.
 
-use `Goland` And other editing tools，open server catalogue，You can't open it. `gin-vue-admin` root directory
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Go 1.26 · Gin · GORM(PostgreSQL) · go-redis · kgo(Kafka) · MongoDB driver · gorilla/websocket |
+| Frontend | Vue 3 · Vite · Element Plus (platform admin reuses the gin-vue-admin shell) |
+| Middleware | Kafka (single-node KRaft, two topics) · Redis 7 · PostgreSQL 15 · MongoDB 7 |
+| Deployment | Docker Compose (8 services) · in-image config.docker.yaml |
+
+## Repository Layout
+
+```
+├── server/                 # Go backend (framework + CS domain)
+│   ├── api/v1/cs/          # platform CS-domain APIs
+│   ├── member/ merchant/   # visitor / merchant & agent APIs and routers
+│   ├── service/cs/         # auth/conversation/message/tenant/channel/audit services
+│   ├── model/cs/           # CS-domain models, request/response DTOs
+│   ├── cmd/ws-gateway/     # WebSocket push gateway (separate process)
+│   ├── cmd/storage-worker/ # Kafka → MongoDB persistence worker (separate process)
+│   └── initialize/         # CS-domain migrations, seeding, router wiring
+├── chat-web/               # Visitor H5 + agent workbench (dual-entry SPA)
+├── merchant-web/           # Merchant admin
+├── web/                    # Platform admin (gin-vue-admin frontend + csPlatform page)
+├── deploy/ docker-compose.yml
+├── scripts/                # e2e acceptance & load-test scripts
+└── docs/cs/                # dev guide / deployment / test report
+```
+
+## Quick Start
+
+### 1. Backend (Docker Compose)
 
 ```bash
-# clone the project
-git clone https://github.com/flipped-aurora/gin-vue-admin.git
-
-# open server catalogue
-cd server
-
-# use go mod And install the go dependency package
-go generate
-
-# Compile 
-go build -o server main.go (windows the compile command is go build -o server.exe main.go )
-
-# Run binary
-./server (windows The run command is server.exe)
+docker compose up -d
 ```
 
-### 2.1 web project
+Brings up 8 services: `pgsql` `redis` `mongo` `kafka` `kafka-init` (idempotent topic creation) `server`(:8888) `storage-worker` `ws-gateway`(:8889). First boot auto-creates CS tables and seed data (tenants demo/shopa/shopb with accounts).
+
+### 2. Frontends (three dev servers)
 
 ```bash
-# enter the project directory
-cd web
-
-# install dependency
-npm install
-
-# develop
-npm run serve
+cd chat-web && npm install && npm run dev        # :8090 visitor H5 + agent workbench
+cd merchant-web && npm install && npm run dev    # :8091 merchant admin
+cd web && npm install && npm run dev -- --port 8099 --strictPort   # platform admin
 ```
 
-### 2.2 Server
+### 3. Entry Points
+
+| Surface | URL | Notes |
+|---|---|---|
+| Visitor H5 | `http://127.0.0.1:8090/h5.html?t=<tenant code>` | `t` picks the merchant channel |
+| Agent workbench | `http://127.0.0.1:8090/workbench.html?t=<tenant code>` | login refused if account/tenant mismatch |
+| Merchant admin | `http://127.0.0.1:8091` | |
+| Platform admin | `http://127.0.0.1:8099/#/layout/csPlatform/merchants` | reuses the framework super-admin session |
+
+### 4. Demo Accounts (dev, password `123456` for all)
+
+| Scope | Accounts | Tenant |
+|---|---|---|
+| Visitor | `member001` / `shopb_member` | demo / shopb |
+| Agent | `agent001` (emp. no. 008) / `agent002` | demo |
+| Merchant admin | `merchantadmin` / `shopbadmin` | demo / shopb |
+| Platform | framework `admin` | the CS page can also mint its token from the framework session |
+
+In development, captcha answers and SMS codes are returned as `devCaptcha`/`devCode` and auto-filled, so scripts can log in fully unattended.
+
+## Acceptance & Load Tests
 
 ```bash
-# using go.mod
-
-# install go modules
-go list (go mod tidy)
-
-# build the server
-go build
+bash scripts/e2e-cs.sh                    # main-pipeline acceptance (67 checks: auth/conversation/messages/idempotency/events/multi-tenant isolation/delete protection)
+node scripts/e2e-notify.mjs               # realtime event channel acceptance (10 checks)
+node scripts/e2e-targeted-notify.mjs      # targeted unread-notification rules (6 checks)
+node scripts/bench_cs.mjs                 # message-pipeline QPS benchmark (bottleneck analysis in docs/cs/test-report.md)
 ```
 
-### 2.3 API docs auto-generation using swagger
+## Documentation
 
-#### 2.3.1 install swagger 
+- [docs/cs/dev-guide.md](docs/cs/dev-guide.md) — API inventory, WS protocol (`subscribe`/`subscribeTenant`/`conv_event`/`tenant_message`), login sequence, event pipeline
+- [docs/cs/deployment.md](docs/cs/deployment.md) — deployment & configuration (config.docker.yaml dependency switches, Kafka topics, image builds)
+- [docs/cs/test-report.md](docs/cs/test-report.md) — acceptance and QPS benchmark report with bottleneck analysis
+- [aiDoc/](aiDoc/README.md) — module rules, memory and relation maps oriented at AI-assisted collaboration
 
-##### (1) Using VPN or outside mainland China
-````
-go get -u github.com/swaggo/swag/cmd/swag
-````
+## Development Conventions
 
-##### (2) In mainland China
+- CS-domain routers are derived from PublicGroup with the domain's own middleware only (the framework PrivateGroup's JWTAuth+Casbin would double-auth and block them); tenant isolation is enforced server-side from token claims — client-supplied tenant context is never trusted.
+- Side channels (events, notifications) must never block the main business flow; failures are log-only.
+- All frontend dev servers bind `0.0.0.0` for LAN collaboration.
 
-In mainland China, access to go.org/x is prohibited，we recommend [goproxy.io](https://goproxy.io/zh/) or [goproxy.cn](https://goproxy.cn)
+## License
 
-````bash
-# If you are using a version of Go 1.13 - 1.15 Need to set up manually GO111MODULE=on, The opening mode is as follows, If your Go version is 1.16 ~ Latest edition You can ignore the following step one
-# Step one、Enable Go Modules Function
-go env -w GO111MODULE=on 
-# Step two、Configuration GOPROXY Environment variable
-go env -w GOPROXY=https://goproxy.cn,https://goproxy.io,direct
-
-# If you dislike trouble,You can use the go generate Automatically execute code before compilation, But this can't be used command line terminal of `Goland` or `Vscode` 
-cd server
-go generate -run "go env -w .*?"
-
-# Use the following command to download swag
-go get -u github.com/swaggo/swag/cmd/swag
-````
-
-#### 2.3.2 API docs generation
-
-````
-cd server
-swag init
-````
-
-> After executing the above command，server directory will appear in the docs folder `docs.go`, `swagger.json`, `swagger.yaml` Three file updates，After starting the go service, type in the browser [http://localhost:8888/swagger/index.html](http://localhost:8888/swagger/index.html) You can view swagger document
-
-
-## 3. Technical selection
-
-- Frontend: using [Element](https://github.com/ElemeFE/element) based on [Vue](https://vuejs.org)，to code the page.
-- Backend: using [Gin](https://gin-gonic.com/) to quickly build basic RESTful API. [Gin](https://gin-gonic.com/)is a web framework written in Go (Golang).
-- DB: `MySql`(5.6.44)，using [gorm](http://gorm.io)` to implement data manipulation, added support for SQLite databases.
-- Cache: using `Redis` to implement the recording of the JWT token of the currently active user and implement the multi-login restriction.
-- API: using Swagger to auto generate APIs docs。
-- Config: using [fsnotify](https://github.com/fsnotify/fsnotify) and [viper](https://github.com/spf13/viper) to implement `yaml` config file。
-- Log: using [zap](https://github.com/uber-go/zap) record logs。
-
-## 4. Project Architecture
-
-### 4.1 Architecture Diagram
-
-![Architecture diagram](http://qmplusimg.henrongyi.top/gva/gin-vue-admin.png)
-
-### 4.2 Front-end Detailed Design Diagram (Contributor: <a href="https://github.com/baobeisuper">baobeisuper</a>)
-
-![Front-end Detailed Design Diagram](http://qmplusimg.henrongyi.top/naotu.png)
-
-### 4.3 Project Layout
-
-```
-    ├── server
-        ├── api             (api entrance)
-        │   └── v1          (v1 version interface)
-        ├── config          (configuration package)
-        ├── core            (core document)
-        ├── docs            (swagger document directory)
-        ├── global          (global object)                    
-        ├── initialize      (initialization)                        
-        │   └── internal    (initialize internal function)                            
-        ├── middleware      (middleware layer)                        
-        ├── model           (model layer)                    
-        │   ├── request     (input parameter structure)                        
-        │   └── response    (out-of-parameter structure)                            
-        ├── packfile        (static file packaging)                        
-        ├── resource        (static resource folder)                        
-        │   ├── excel       (excel import and export default path)                        
-        │   ├── page        (form generator)                        
-        │   └── template    (template)                            
-        ├── router          (routing layer)                    
-        ├── service         (service layer)                    
-        ├── source          (source layer)                    
-        └── utils           (tool kit)                    
-            ├── timer       (timer interface encapsulation)                        
-            └── upload      (oss interface encapsulation)  
-            
-    └─web            （frontend）
-        ├─public        （deploy templates）
-        └─src           （source code）
-            ├─api       （frontend APIs）
-            ├─assets	（static files）
-            ├─components（components）
-            ├─router	（frontend routers）
-            ├─store     （vuex state management）
-            ├─style     （common styles）
-            ├─utils     （frontend common utilitie）
-            └─view      （pages）
-
-```
-
-## 5. Features
-
-- Authority management: Authority management based on `jwt` and `casbin`. 
-- File upload and download: implement file upload operations based on `Qiniuyun', `Aliyun 'and `Tencent Cloud` (please develop your own application for each platform corresponding to `token` or `key` ).
-- Pagination Encapsulation：The frontend uses `mixins` to encapsulate paging, and the paging method can call `mixins` .
-- User management: The system administrator assigns user roles and role permissions.
-- Role management: Create the main object of permission control, and then assign different API permissions and menu permissions to the role.
-- Menu management: User dynamic menu configuration implementation, assigning different menus to different roles.
-- API management: Different users can call different API permissions.
-- Configuration management: the configuration file can be modified in the foreground (this feature is not available in the online experience site).
-- Conditional search: Add an example of conditional search.
-- Restful example: You can see sample APIs in user management module.
-  - Front-end file reference: [web/src/view/superAdmin/api/api.vue](https://github.com/flipped-aurora/gin-vue-admin/blob/master/web/src/view/superAdmin/api/api.vue).
-  - Stage reference: [server/router/sys_api.go](https://github.com/flipped-aurora/gin-vue-admin/blob/master/server/router/sys_api.go).
-- Multi-login restriction: Change `user-multipoint` to true in `system` in `config.yaml` (You need to configure redis and redis parameters yourself. During the test period, please report in time if there is a bug).
-- Upload file by chunk：Provides examples of file upload and large file upload by chunk.
-- Form Builder：With the help of [@form-generator](https://github.com/JakHuang/form-generator).
-- Code generator: Providing backend with basic logic and simple curd code generator.
-
-## 6. Knowledge base
-
-### 6.1 Team blog
-
-> https://www.yuque.com/flipped-aurora
->
->There are video courses about frontend framework in our blo. If you think the project is helpful to you, you can add my personal WeChat:shouzi_1994，your comments is welcomed。
-
-### 6.2 Video courses
-
-(1) Development environment course
-
-> Bilibili：https://www.bilibili.com/video/BV1Fg4y187Bw/
-
-(2) Template course
-
-> Bilibili：https://www.bilibili.com/video/BV16K4y1r7BD/
-
-(3) 2.0 version introduction and development experience
-
-> Bilibili：https://www.bilibili.com/video/BV1aV411d7Gm#reply2831798461
-
-(4) Golang basic course
-
-> https://space.bilibili.com/322210472/channel/detail?cid=108884
-
-(5) gin frame basic teaching
-
-> bilibili：https://space.bilibili.com/322210472/channel/detail?cid=126418&ctype=0
-
-(6) gin-vue-admin version update introduction video
-> bilibili：https://space.bilibili.com/322210472/channel/detail?cid=126418&ctype=0
-
-## 7.Contacts
-
-### 7.1 Groups
-
-#### QQ group: 622360840
-
-| QQ group |d
-|  :---:  |
-| <img src="http://qmplusimg.henrongyi.top/qq.jpg" width="180"/> |
-
-
-#### Wechat group: comment "加入gin-vue-admin交流群"
-
-| Wechat |
-|  :---:  | 
-| <img width="150" src="http://qmplusimg.henrongyi.top/qrjjz.png"> 
-
-#### [About Us](https://www.gin-vue-admin.com/about/join.html)
-
-## 8. Contributors
-
-Thank you for considering your contribution to gin-vue-admin!
-
-<a href="https://openomy.app/github/flipped-aurora/gin-vue-admin" target="_blank" style="display: block; width: 100%;" align="center">
-  <img src="https://openomy.app/svg?repo=flipped-aurora/gin-vue-admin&chart=bubble&latestMonth=3" target="_blank" alt="Contribution Leaderboard" style="display: block; width: 100%;" />
- </a>
-
-<a href="https://github.com/flipped-aurora/gin-vue-admin/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=flipped-aurora/gin-vue-admin" />
-</a>
-
-## 9. Donate
-
-If you find this project useful, you can buy author a glass of juice :tropical_drink: [here](https://www.gin-vue-admin.com/coffee/index.html)
-
-## 10. Commercial considerations
-
-This project is licensed under the Apache License 2.0. When using, modifying, or distributing it, follow the `LICENSE` file and retain all applicable notices required by the license.
-
+This project is derived from [gin-vue-admin](https://github.com/flipped-aurora/gin-vue-admin) (Apache-2.0). See [LICENSE](LICENSE) and [aiDoc/relations/licensing-and-branding.md](aiDoc/relations/licensing-and-branding.md) for licensing and branding notes.
