@@ -1,0 +1,193 @@
+# gin-vue-admin 全栈依赖部署：pgsql17 + redis + mongodb + kafka + server
+# 服务间通过自定义 bridge 网络以“容器名”作为 DNS 主机名互访：
+#   pgsql -> gva-pgsql:5432   redis -> gva-redis:6379   mongo -> gva-mongo:27017   kafka -> gva-kafka:9092
+
+networks:
+  gva-net:
+    driver: bridge
+
+volumes:
+  gva-pgsql-data:
+  gva-redis-data:
+  gva-mongo-data:
+  gva-kafka-data:
+  gva-server-uploads:
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 17（服务端主库，db-type: pgsql）
+  # ---------------------------------------------------------------------------
+  pgsql:
+    image: postgres:17
+    container_name: gva-pgsql
+    restart: always
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: gva
+      POSTGRES_PASSWORD: gva123
+      POSTGRES_DB: gva
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gva -d gva"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - gva-pgsql-data:/var/lib/postgresql/data
+    networks:
+      gva-net:
+
+  # ---------------------------------------------------------------------------
+  # Redis（system.use-redis: true）
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: gva-redis
+    restart: always
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - gva-redis-data:/data
+    networks:
+      gva-net:
+
+  # ---------------------------------------------------------------------------
+  # MongoDB（system.use-mongo: true，未开启鉴权）
+  # ---------------------------------------------------------------------------
+  mongo:
+    image: mongo:7
+    container_name: gva-mongo
+    restart: always
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_DATABASE: gva
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - gva-mongo-data:/data/db
+    networks:
+      gva-net:
+
+  # ---------------------------------------------------------------------------
+  # Kafka（KRaft 单机模式，无需 ZooKeeper）
+  # 注意：当前项目代码未集成 Kafka 客户端，此处仅作为基础设施提供，
+  #       服务端不会自动连接。如需使用请自行添加 Go Kafka 客户端代码与配置。
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.8.1
+    container_name: gva-kafka
+    restart: always
+    ports:
+      - "29092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@gva-kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://gva-kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
+    volumes:
+      - gva-kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      gva-net:
+
+  # ---------------------------------------------------------------------------
+  #  gin-vue-admin 服务端（构建 server/Dockerfile）
+  #  通过 bind-mount 覆盖镜像内的 config.docker.yaml，改配置后重启即可、无需重建
+  # ---------------------------------------------------------------------------
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: gva-server:pgsql
+    container_name: gva-server
+    restart: always
+    ports:
+      - "8888:8888"
+    depends_on:
+      pgsql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./server/config.docker.yaml:/go/src/github.com/flipped-aurora/gin-vue-admin/server/config.docker.yaml:ro
+      - gva-server-uploads:/go/src/github.com/flipped-aurora/gin-vue-admin/server/uploads
+    networks:
+      gva-net:
+
+  # ---------------------------------------------------------------------------
+  #  客服系统异步组件(同一镜像不同入口, 共享 config.docker.yaml)
+  #  kafka-init: 一次性任务, 幂等创建业务 topic(镜像默认未开自动建 topic)
+  #  storage-worker: Kafka(cg-storage) → MongoDB 落库 + PG seq 水位
+  # ---------------------------------------------------------------------------
+  kafka-init:
+    image: apache/kafka:3.8.1
+    container_name: gva-kafka-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["/opt/kafka/bin/kafka-topics.sh --bootstrap-server gva-kafka:9092 --create --if-not-exists --topic im.message --partitions 1 --replication-factor 1 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server gva-kafka:9092 --create --if-not-exists --topic im.conversation.event --partitions 1 --replication-factor 1"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      gva-net:
+
+  storage-worker:
+    image: gva-server:pgsql
+    container_name: gva-storage-worker
+    restart: always
+    entrypoint: ["./storage-worker", "-c", "config.docker.yaml"]
+    depends_on:
+      server:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./server/config.docker.yaml:/go/src/github.com/flipped-aurora/gin-vue-admin/server/config.docker.yaml:ro
+    networks:
+      gva-net:
+
+  # ---------------------------------------------------------------------------
+  #  ws-gateway: WebSocket 推送网关(cg-dispatch), 端口 8889, 入口 /ws?token=<cstoken>
+  # ---------------------------------------------------------------------------
+  ws-gateway:
+    image: gva-server:pgsql
+    container_name: gva-ws-gateway
+    restart: always
+    entrypoint: ["./ws-gateway", "-c", "config.docker.yaml"]
+    ports:
+      - "8889:8889"
+    depends_on:
+      server:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./server/config.docker.yaml:/go/src/github.com/flipped-aurora/gin-vue-admin/server/config.docker.yaml:ro
+    networks:
+      gva-net:
