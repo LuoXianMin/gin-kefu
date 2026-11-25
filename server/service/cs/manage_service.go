@@ -2,6 +2,9 @@ package cs
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,6 +25,21 @@ var (
 
 // ---- 平台端: 租户管理 ----
 
+// uniqueTenantCode 租户编码自动追加 8 位 md5 唯一后缀(如 shopc-3fa1b2c4):
+// code 为全局唯一索引且软删行仍占用, 自动后缀避免重名冲突并保留输入主体便于识别;
+// 基础段截短至 55 字符, 确保拼接后不超 size:64 列宽
+func uniqueTenantCode(base string) string {
+	if len(base) > 55 {
+		base = base[:55]
+	}
+	seed := make([]byte, 16)
+	if _, err := rand.Read(seed); err != nil {
+		seed = []byte(fmt.Sprintf("%d", time.Now().UnixNano()))
+	}
+	sum := md5.Sum([]byte(fmt.Sprintf("%s|%d|%x", base, time.Now().UnixNano(), seed)))
+	return base + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
 type TenantAdminService struct{}
 
 func (s *TenantAdminService) Create(req csReq.TenantCreateReq) (*csRes.TenantRes, error) {
@@ -30,7 +48,7 @@ func (s *TenantAdminService) Create(req csReq.TenantCreateReq) (*csRes.TenantRes
 		hard = agentHardCap
 	}
 	t := cs.CsTenant{
-		Code: strings.TrimSpace(req.Code), Name: strings.TrimSpace(req.Name),
+		Code: uniqueTenantCode(strings.TrimSpace(req.Code)), Name: strings.TrimSpace(req.Name),
 		Status: cs.TenantStatusNormal, Package: req.Package,
 		AgentHardLimit: hard, WelcomeTemplate: req.WelcomeTemplate,
 		DomainWhitelist: req.DomainWhitelist,

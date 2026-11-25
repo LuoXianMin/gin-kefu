@@ -308,7 +308,8 @@ async function reportRead() {
 // ===== 登录 =====
 async function loadCaptcha() {
   const data = await req(SCOPE, '/agent/captcha', { method: 'POST' })
-  pic.value = { b64: 'data:image/png;base64,' + (data.picPath || ''), id: data.captchaId }
+  // 后端 picPath 已带 dataURI 前缀, 兼容裸 base64 两种形态, 避免双前缀致图裂
+  pic.value = { b64: data.picPath && data.picPath.startsWith('data:') ? data.picPath : 'data:image/png;base64,' + (data.picPath || ''), id: data.captchaId }
   if (data.devCaptcha) form.captcha = data.devCaptcha
 }
 async function sendSms() {

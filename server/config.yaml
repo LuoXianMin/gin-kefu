@@ -103,6 +103,10 @@ system:
     #  禁用自动迁移数据库表结构，生产环境建议设为true，手动迁移
     disable-auto-migrate: false
 
+# SSO 渠道免密进入(客服系统 h5 ?user= AES 参数)
+sso:
+    aes-key-env: GVA_CS_SSO_KEY # SSO 免密进入(h5 ?user=)AES-256-GCM 密钥的环境变量名; 未注入=接口拒绝服务
+    max-age-sec: 0 # 明文 ts 字段允许的最大时效(秒), 0=不校验时效
 # captcha configuration
 captcha:
     key-long: 6

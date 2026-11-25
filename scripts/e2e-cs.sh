@@ -34,7 +34,7 @@ agent_login() {
     -d "{\"username\":\"$user\",\"password\":\"123456\",\"captcha\":\"$(echo "$CR" | jget "['data']['devCaptcha']")\",\"captchaId\":\"$(echo "$CR" | jget "['data']['captchaId']")\",\"smsCode\":\"$DEV\"$TCF}"
 }
 MTOK=$(curl -s -X POST $BASE/member/login -H 'Content-Type: application/json' \
-  -d '{"username":"member001","password":"123456"}' | jget "['data']['token']")
+  -d '{"username":"member001","password":"123456","tenantCode":"demo"}' | jget "['data']['token']")
 [ -n "$MTOK" ] && ok "member登录" || bad "member登录" "(见下行原始响应)"
 new_conv() { curl -s -X POST $BASE/member/conversations -H "x-token: $MTOK" -H 'Content-Type: application/json' \
   -d '{"title":"E2E测试会话","source":"H5"}'; }
@@ -306,13 +306,13 @@ curl -s -X POST $BASE/merchant/admin/agents -H "x-token: $SBK" -H 'Content-Type:
 MLS=$(curl -s "$BASE/merchant/admin/members?page=1&pageSize=10&keyword=shopb_member" -H "x-token: $SBK")
 echo "$MLS" | grep -q 'shopb_member' && ok "商户后台访客账号建/查" || bad "访客账号CRUD" "$MLS"
 BAD=$(curl -s -X POST $BASE/member/login -H 'Content-Type: application/json' -d '{"username":"member001","password":"123456","tenantCode":"shopb"}')
-echo "$BAD" | grep -q '不属于' && ok "跨商户渠道串入被拒" || bad "跨商户校验" "$BAD"
+echo "$BAD" | grep -q '渠道' && ok "跨商户/缺渠道登录被拒(渠道强制)" || bad "跨商户校验" "$BAD"
 GOOD=$(curl -s -X POST $BASE/member/login -H 'Content-Type: application/json' -d '{"username":"shopb_member","password":"123456","tenantCode":"shopb"}')
 BTOK=$(echo "$GOOD" | jget "['data']['token']")
 TG=$(echo "$GOOD" | jget "['data']['tenant']['code']")
 [ "$TG" = "shopb" ] && ok "访客带渠道标识登录+回显商户信息" || bad "渠道登录" "$GOOD"
 LEG=$(curl -s -X POST $BASE/member/login -H 'Content-Type: application/json' -d '{"username":"shopb_member","password":"123456"}')
-echo "$LEG" | grep -q '"token"' && ok "无标识登录兼容旧行为" || bad "兼容登录" "$LEG"
+echo "$LEG" | grep -q '渠道' && ok "无渠道标识登录被拒(B2B强制)" || bad "无渠道拒登" "$LEG"
 TP=$(curl -s "$BASE/member/tenant?code=shopb")
 echo "$TP" | grep -q '"status":1' && echo "$TP" | grep -q '商户B' && ok "公开商户渠道查询" || bad "渠道查询" "$TP"
 CVB=$(curl -s -X POST $BASE/member/conversations -H "x-token: $BTOK" -H 'Content-Type: application/json' -d '{"source":"H5-shopb"}')

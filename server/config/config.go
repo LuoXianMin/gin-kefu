@@ -20,6 +20,8 @@ type Server struct {
 	DBList []SpecializedDB `mapstructure:"db-list" json:"db-list" yaml:"db-list"`
 	// 短信验证码
 	Sms Sms `mapstructure:"sms" json:"sms" yaml:"sms"`
+	// SSO 渠道免密进入(客服系统 h5 ?user= 参数)
+	Sso Sso `mapstructure:"sso" json:"sso" yaml:"sso"`
 	// Kafka 消息链路(客服系统)
 	Kafka Kafka `mapstructure:"kafka" json:"kafka" yaml:"kafka"`
 	// oss

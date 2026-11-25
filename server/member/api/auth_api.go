@@ -29,6 +29,21 @@ func (a *MemberAuthApi) Login(c *gin.Context) {
 	response.OkWithDetailed(res, "登录成功", c)
 }
 
+// SsoLogin 商户渠道免密进入: user 为 AES 加密的用户信息, 服务端解密后自动建档/复用并直接发令牌
+func (a *MemberAuthApi) SsoLogin(c *gin.Context) {
+	var req csReq.SsoLoginReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	res, err := memberAuthSvc.MemberSsoLogin(c.Request.Context(), req)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.OkWithDetailed(res, "登录成功", c)
+}
+
 // TenantInfo 公开接口: H5 接入链接按商户标识展示商户名/服务状态(无需登录)
 func (a *MemberAuthApi) TenantInfo(c *gin.Context) {
 	code := c.Query("code")

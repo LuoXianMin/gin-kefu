@@ -99,6 +99,10 @@ system:
     #  严格角色模式 打开后权限将会存在上下级关系
     use-strict-auth: false
 
+# SSO 渠道免密进入(客服系统 h5 ?user= AES 参数)
+sso:
+    aes-key-env: GVA_CS_SSO_KEY # 密钥由 compose environment 注入; 未注入=接口拒绝服务
+    max-age-sec: 0 # 明文 ts 字段允许的最大时效(秒), 0=不校验时效
 # captcha configuration
 captcha:
     key-long: 6

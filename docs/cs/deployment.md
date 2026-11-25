@@ -74,14 +74,97 @@ DELETE FROM cs_assignment_events   WHERE conversation_id IN (SELECT id FROM cs_c
 DELETE FROM cs_conversations WHERE title='BENCH';
 ```
 
-## 6. 生产部署要点
+## 6. 生产部署配置清单
 
-- 仓库自带编排样例：`deploy/docker/`、`deploy/docker-compose/`、`deploy/kubernetes/`（server/web 两套 k8s yaml）；本项目的根 `docker-compose.yml` 为当前实测版本，优先参考。
-- 必须调整：
-  1. `system.jwt-key` 与 cstoken 密钥更换为生产随机值；`config.docker.yaml` 中数据库/Redis/Mongo 口令改强密码并去掉 :ro 挂载依赖（或改用 ConfigMap/Secret）。
-  2. 前端 `csPlatform` 接入链接的 `:8090` dev 端口写死（`web/src/view/csPlatform/index.vue` 的 `chatBase`）需替换为正式域名。
-  3. 生产关闭 dev 回显（`devCaptcha/devCode` 由 sms/captcha 配置开关控制），接入真实短信通道。
-  4. 限流值按业务 SLA 复核（访客发消息 60/min/账号、客服 120/min、登录 10/min/IP、渠道查询 30/min/IP）。
+### 6.1 配置文件四层结构
+
+| 层 | 文件 | 说明 |
+|---|---|---|
+| **敏感配置单一来源** | **根目录 `.env`**（模板 `.env.example`，已 gitignore） | 所有密钥/口令集中于此，`docker compose` 启动时自动加载；生产 `cp .env.example .env` 填真实值 |
+| 后端主配置 | **`server/config.docker.yaml`** | 容器实际生效入口（compose `:ro` bind-mount 覆盖镜像内同名文件）；非敏感项在此，敏感项可被 `.env` 覆盖（见 6.2）；改完 `docker compose restart server` 即生效 |
+| 环境变量注入 | 根 `docker-compose.yml` 的 `x-app-env` 锚点 | server/storage-worker/ws-gateway 三进程共享同一套 `${GVA_*}` 插值；pgsql/redis/mongo 容器凭据与程序用同源变量，不会改出不一致 |
+| 前端构建变量 | `web/.env.production`、`chat-web/.env.production`、`merchant-web/.env.production` | 生产为静态产物，改配置 = 重新 `npm run build`；`VITE_BASE_API=/api` 配合 nginx 反代 |
+
+**env 覆盖机制**（`server/core/env_override.go`，三进程均经 `core.Viper()` 生效）：配置加载后按下列环境变量**非空则覆盖** yaml 同名字段，未设置完全保持 yaml 原值（向后兼容）：
+
+| 环境变量 | 覆盖目标 |
+|---|---|
+| `GVA_JWT_SIGNING_KEY` | `jwt.signing-key`（换钥=全员重登，建议部署最后一步） |
+| `GVA_DB_USERNAME/PASSWORD/NAME` | `system.db-type` 所选主库（pgsql/mysql/...）的用户/密码/库名，与 pgsql 容器 `POSTGRES_*` 同源 |
+| `GVA_REDIS_PASSWORD` | `redis.password`；非空时 compose 的 redis 容器同时自动开启 `requirepass` |
+| `GVA_MONGO_USERNAME/PASSWORD` | `mongo` 认证；两者均非空时 mongo 容器启用 root 鉴权（**仅对全新数据卷生效**，存量卷需手动 `createUser`+`setFeatureCompatibilityVersion` 开 auth） |
+| `GVA_OSS_ACCESS_KEY_ID/SECRET` | 按 `system.oss-type` 覆盖对应 OSS 段（aliyun/minio/qiniu/tencent/aws/cloudflare/huawei 全支持；local 无凭据） |
+| `GVA_CS_SSO_KEY` | SSO AES 密钥（程序 `os.Getenv` 原生读取，非覆盖机制） |
+| `GVA_SMS_AK/SK` | 短信凭证（同上，env 名由 `sms.access-key-env/secret-key-env` 指定） |
+
+> 注意：改 `.env` 后 `docker compose up -d` 会自动重建 env 变化的容器；覆盖机制不支持 `db-list` 多库段与 `local` 存储路径（仍在 yaml 配）。
+
+⚠️ `deploy/docker-compose/`、`deploy/kubernetes/` 是 gin-vue-admin 原版遗留样例（mysql、`env: develop`），**与本项目实际部署的根目录 `docker-compose.yml` 无关**，勿改错文件；若要上 k8s 需按根 compose 的服务拓扑整体重建编排。
+
+### 6.2 逐项必改（`config.docker.yaml` 内）
+
+**① JWT 签名密钥（L4-8）——最高优先级**
+```yaml
+jwt:
+    signing-key: qmPlus     # ← 框架默认值，生产必须换强随机串
+```
+推荐不在 yaml 填真实值，改用根目录 `.env` 的 `GVA_JWT_SIGNING_KEY` 覆盖（见 6.1 机制表）。所有令牌域（框架 + cstoken）与文件下载 HMAC 短链均由它派生；更换后旧令牌全部失效（全员重登）。
+
+**② 短信（L115-127）**
+```yaml
+sms:
+    provider: log           # → http（通用HTTP网关）
+    endpoint: ""            # → 短信网关地址
+    sign-name / template-code   # → 短信签名与模板 Code
+    dev-return-code: true   # → 必须 false！否则验证码直接回显，等同 MFA 旁路
+```
+AK/SK 不落文件：`access-key-env: GVA_SMS_AK`、`secret-key-env: GVA_SMS_SK` 指定**环境变量名**，密钥值由部署环境注入。
+
+**③ SSO AES 密钥（L103-105）**
+```yaml
+sso:
+    aes-key-env: GVA_CS_SSO_KEY   # 文件里只有变量名；未注入=接口自动拒绝服务
+    max-age-sec: 0                # 生产建议开启时效（如 300 秒）
+```
+⚠️ 密钥真实值已集中到根目录 `.env` 的 `GVA_CS_SSO_KEY`（开发值 `gva-cs-sso-dev-key-2026` 不入库；compose 仅插值不再写死明文），生产替换 `.env` 值后 `docker compose up -d` 重建生效。商户侧对接规范见 [sso-php.md](sso-php.md)。
+
+**④ OSS（L89 + L205-282）**
+- 选型开关：`system.oss-type: local` → `aliyun-oss` / `qiniu` / `minio` / `tencent-cos` / `aws-s3` / `cloudflare-r2` / `hua-wei-obs`
+- AK/SK 推荐走 `.env` 的 `GVA_OSS_ACCESS_KEY_ID/GVA_OSS_ACCESS_KEY_SECRET`（按 oss-type 自动落到对应段，yaml 只留 endpoint/bucket 等非敏感项）；若仍写在 yaml，**切勿把真实凭证提交进 git**
+- `local` 模式存储目录 `local.path: uploads/file`（compose 已用具名卷 `gva-server-uploads` 持久化）
+
+**⑤ 数据库/中间件凭据（现均已在 `.env` 集中，yaml 里的开发值仅作未覆盖时的兑底）**
+```env
+# 根目录 .env
+GVA_DB_USERNAME=gva / GVA_DB_PASSWORD=gva123 / GVA_DB_NAME=gva   # → 生产强密码(与 pgsql 容器同源)
+GVA_REDIS_PASSWORD=          # → 非空即启用 redis 容器 requirepass + 程序同步生效
+GVA_MONGO_USERNAME= / GVA_MONGO_PASSWORD=   # → 非空即启用 mongo root 鉴权(仅全新卷生效)
+```
+compose 的 pgsql `POSTGRES_USER/PASSWORD/DB`、redis `requirepass`、mongo `MONGO_INITDB_ROOT_*` 与上表是**同一组变量**，改 `.env` 一处即全栈同步。kafka brokers 仍在 yaml（非敏感）；`db-list` 多库段不支持 env 覆盖。
+
+**⑥ 系统开关（L85-100）**
+- `system.env: local` → `public`（关闭路由日志输出）
+- `use-redis/use-mongo: true` 不能关（客服链路强依赖）；`db-type: pgsql` 保持
+- `system.router-prefix` 若 nginx 要加前缀在此改，**前端三端 API 路径与 e2e 脚本需同步**
+- `captcha.open-captcha`、`iplimit-*` 按业务复核
+
+### 6.3 敏感凭证现状与处置速查
+
+| 凭证 | 现在在哪 | 生产动作 |
+|---|---|---|
+| JWT signing-key | yaml L5 默认 `qmPlus`；可被 `.env` `GVA_JWT_SIGNING_KEY` 覆盖 | `.env` 填强随机 |
+| 短信 AK/SK | `.env` `GVA_SMS_AK/GVA_SMS_SK`（log 模式未用到） | 部署环境注入 |
+| SSO AES 密钥 | `.env` `GVA_CS_SSO_KEY`（开发值；compose 不再写死明文） | `.env` 换生产密钥 |
+| pgsql 密码 | `.env` `GVA_DB_PASSWORD`（与 pgsql 容器同源） | `.env` 改强密码一处生效 |
+| OSS AK/SK | `.env` `GVA_OSS_ACCESS_KEY_ID/SECRET`（按 oss-type 落段） | `.env` 填真实值 |
+| admin 初始密码 | 种子/initdb `123456` | 首登立即改 |
+
+安全红线全集另见 [security-ratelimit.md](security-ratelimit.md) §2.4（生产必查开关清单）。
+
+### 6.4 其他部署要点
+
+- 前端 `csPlatform` 接入链接的 `:8090` dev 端口写死（`web/src/view/csPlatform/index.vue` 的 `chatBase`）需替换为正式域名。
+- 限流值按业务 SLA 复核（访客发消息 60/min/账号、客服 120/min、登录 10/min/IP、渠道查询 30/min/IP）。
 - HTTPS 部署时 WS 地址自动切 `wss://`（`chat-web/src/common/api.js` 按 `location.protocol` 判断），需在网关前置反代开启 WebSocket upgrade 透传。
 - 容量参考（见测试报告）：单实例 gva-server 消息链路吞吐 ~1000-1800 msg/s，瓶颈依次为业务限流 → server CPU → Kafka 单 broker → pgsql；扩容优先 server 水平复制 + Kafka 分区数。
 

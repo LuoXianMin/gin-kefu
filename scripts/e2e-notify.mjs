@@ -96,7 +96,7 @@ const tenantMsgOf = (convId) => (p) => p.type === 'tenant_message' && p.body?.co
 
 async function main() {
   console.log('[1] 登录 member001 / agent001')
-  const mres = await jpost('/member/login', { username: 'member001', password: '123456' })
+  const mres = await jpost('/member/login', { username: 'member001', password: '123456', tenantCode: 'demo' })
   if (!mres.data?.token) { bad('member登录', JSON.stringify(mres).slice(0, 160)); return }
   const MT = mres.data.token
   ok('member登录')

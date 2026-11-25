@@ -51,7 +51,8 @@ const counting = ref(0)
 const devHint = ref('')
 
 const applyCaptcha = (data) => {
-  pic.value = { b64: 'data:image/png;base64,' + (data.picPath || ''), id: data.captchaId, dev: data.devCaptcha || '' }
+  // 后端 picPath 已带 dataURI 前缀, 兼容裸 base64 两种形态, 避免双前缀致图裂
+  pic.value = { b64: data.picPath && data.picPath.startsWith('data:') ? data.picPath : 'data:image/png;base64,' + (data.picPath || ''), id: data.captchaId, dev: data.devCaptcha || '' }
   if (data.devCaptcha) form.captcha = data.devCaptcha // 开发环境自动回填
 }
 const loadCaptcha = async () => applyCaptcha(await apiCaptcha())

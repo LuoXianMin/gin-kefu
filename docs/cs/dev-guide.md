@@ -51,7 +51,8 @@
 ### member（访客，:8888 根路径）
 | 方法/路径 | 说明 |
 |---|---|
-| POST `/member/login` | 账密 + 可选 `tenantCode`（10/min/IP 限流）|
+| POST `/member/login` | 账密 + **必带 `tenantCode`**（无渠道标识拒登，B2B 强制；10/min/IP 限流）|
+| POST `/member/sso-login` | SSO 免密进入 `{tenantCode, user}`：user 为 AES-256-GCM 密文（key=SHA256(环境变量 GVA_CS_SSO_KEY)，格式 base64(iv[12B]+密文+tag)，明文 JSON `{username/externalId/phone/nickName/ts}`），服务端解密后自动写入/复用本商户 cs_members（source=SSO，跨租户同名自动加商户码前缀防误连）并直接签发访客令牌（20/min/IP）；h5 链接 `?t=<code>&user=<密文>` 自动登录进会话 |
 | GET `/member/tenant?code=` | 公开商户渠道查询（30/min/IP）|
 | POST `/member/conversations` | 建会话或取回活跃会话（CreateOrResume）|
 | POST `/member/conversations/:id/messages` | 发消息 `{clientMsgId,type,body}`，type ∈ text\|image（60/min/账号）|

@@ -4,11 +4,11 @@
     <div v-if="!token" class="login-wrap">
       <div class="glass login-card">
         <div class="brand">{{ brandName }}</div>
-        <p class="sub">{{ tenantClosed ? '该商户客服暂时停止服务, 请稍后再来' : '登录后即可与客服沟通, 支持文字、emoji 与图片。' }}</p>
+        <p class="sub">{{ !tenantCode ? '未识别到商户渠道, 请通过商户客服链接(带 t=渠道编码)访问' : tenantClosed ? '该商户客服暂时停止服务, 请稍后再来' : '登录后即可与客服沟通, 支持文字、emoji 与图片。' }}</p>
         <input v-model="form.username" placeholder="账号 / 手机号" />
         <input v-model="form.password" type="password" placeholder="密码" />
-        <button class="btn-primary" :disabled="loading || tenantClosed" @click="doLogin">
-          {{ loading ? '登录中…' : '登 录' }}
+        <button class="btn-primary" :disabled="loading || ssoPending || tenantClosed || !tenantCode" @click="doLogin">
+          {{ ssoPending ? '自动登录中…' : loading ? '登录中…' : '登 录' }}
         </button>
         <div v-if="err" class="err">{{ err }}</div>
       </div>
@@ -77,6 +77,9 @@ const tenantCode = ref(
   urlParams.get('t') || urlParams.get('tenant') || urlParams.get('code') || localStorage.getItem('cs_h5_tenant') || ''
 )
 if (tenantCode.value) localStorage.setItem('cs_h5_tenant', tenantCode.value)
+// SSO 免密进入: 链接携带 ?user=<AES加密用户信息>, 后端解密自动建档登录
+const ssoUser = urlParams.get('user') || ''
+const ssoPending = ref(false)
 const tenant = ref(null)
 const tenantClosed = computed(() => !!tenant.value && tenant.value.status !== 1)
 const brandName = computed(() => (tenant.value && tenant.value.name ? tenant.value.name + ' 在线客服' : '在线客服'))
@@ -248,9 +251,32 @@ async function onPickFile(ev) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadTenant()
-  if (token.value) openConversation().catch(() => logout())
+  if (token.value) {
+    openConversation().catch(() => logout())
+    return
+  }
+  // SSO: 有 user 参数且已有渠道 → 调后端解密建号+发令牌, 成功直接进会话; 失败回退手动登录卡片
+  if (ssoUser && tenantCode.value) {
+    ssoPending.value = true
+    try {
+      const data = await req(SCOPE, '/member/sso-login', {
+        method: 'POST',
+        body: { tenantCode: tenantCode.value, user: ssoUser }
+      })
+      setToken(SCOPE, data.token)
+      token.value = data.token
+      if (!tenant.value && data.tenant) tenant.value = { ...data.tenant, status: 1 }
+      // 清掉地址栏密文, 避免分享/回退重复消费
+      history.replaceState(null, '', location.pathname + '?t=' + encodeURIComponent(tenantCode.value))
+      await openConversation()
+    } catch (e) {
+      err.value = '自动登录失败: ' + e.message
+    } finally {
+      ssoPending.value = false
+    }
+  }
 })
 onBeforeUnmount(() => ws && ws.close())
 </script>

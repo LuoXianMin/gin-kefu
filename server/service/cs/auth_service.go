@@ -2,8 +2,13 @@ package cs
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/flipped-aurora/gin-vue-admin/server/global"
@@ -11,6 +16,7 @@ import (
 	csReq "github.com/flipped-aurora/gin-vue-admin/server/model/cs/request"
 	csRes "github.com/flipped-aurora/gin-vue-admin/server/model/cs/response"
 	sysModel "github.com/flipped-aurora/gin-vue-admin/server/model/system"
+	"github.com/flipped-aurora/gin-vue-admin/server/utils/csaes"
 	"github.com/flipped-aurora/gin-vue-admin/server/utils/cstoken"
 	"gorm.io/gorm"
 )
@@ -278,8 +284,12 @@ func (s *AuthService) AgentLogin(ctx context.Context, req csReq.MfaLoginReq) (*c
 	}, nil
 }
 
-// MemberLogin 用户端 H5 登录: 仅账密; 支持接入链接携带的商户标识校验账号归属
+// MemberLogin 用户端 H5 登录: 账密 + 必带商户渠道标识(tenantCode), 无渠道拒登
 func (s *AuthService) MemberLogin(ctx context.Context, req csReq.MemberLoginReq) (*csRes.MemberLoginRes, error) {
+	// B2B 渠道强制: 访客必须从商户接入链接(t=<code>)进入, 无渠道标识一律拒登(前置于查库, 省无效 bcrypt)
+	if strings.TrimSpace(req.TenantCode) == "" {
+		return nil, errors.New("缺少商户渠道标识, 请通过商户客服链接访问")
+	}
 	m, err := memberSvc.GetActiveByUsername(req.Username)
 	if err != nil {
 		if errors.Is(err, ErrAccountNotFound) {
@@ -311,6 +321,143 @@ func (s *AuthService) MemberLogin(ctx context.Context, req csReq.MemberLoginReq)
 			NickName: m.NickName, Source: m.Source,
 		},
 	}, nil
+}
+
+// ssoSecret 从配置指定的环境变量读取 SSO AES 密钥(未配置/未注入 = 禁用该入口)
+func ssoSecret() string {
+	env := global.GVA_CONFIG.Sso.AesKeyEnv
+	if env == "" {
+		return ""
+	}
+	return os.Getenv(env)
+}
+
+// ssoUserPayload SSO 密文解密后的用户信息(账号标识优先生效顺序: username > externalId > phone)
+type ssoUserPayload struct {
+	Username   string `json:"username"`
+	ExternalId string `json:"externalId"`
+	Phone      string `json:"phone"`
+	NickName   string `json:"nickName"`
+	Ts         int64  `json:"ts"` // 可选: 签发时刻(unix秒), 配置 max-age-sec>0 时校验时效
+}
+
+// MemberSsoLogin 商户渠道免密进入: 解密 h5 ?user= 的 AES-256-GCM 参数 →
+// 自动写入/复用对应商户的 cs_members 访客 → 签发与账密登录同构的访客令牌。
+// 账号映射: username 全局唯一索引, 同租户同名复用(刷新资料), 跨租户占用则加商户码前缀, 避免误连他人账号
+func (s *AuthService) MemberSsoLogin(ctx context.Context, req csReq.SsoLoginReq) (*csRes.MemberLoginRes, error) {
+	secret := ssoSecret()
+	if secret == "" {
+		return nil, errors.New("SSO 登录未启用")
+	}
+	plain, err := csaes.Decrypt(secret, strings.TrimSpace(req.User))
+	if err != nil {
+		return nil, err
+	}
+	var u ssoUserPayload
+	if err := json.Unmarshal(plain, &u); err != nil {
+		return nil, errors.New("解密后用户信息不是合法 JSON")
+	}
+	if age := global.GVA_CONFIG.Sso.MaxAgeSec; age > 0 && u.Ts > 0 && time.Now().Unix()-u.Ts > int64(age) {
+		return nil, errors.New("SSO 链接已过期, 请从商户页面重新进入")
+	}
+	ident := firstNonEmpty(strings.TrimSpace(u.Username), strings.TrimSpace(u.ExternalId), strings.TrimSpace(u.Phone))
+	if ident == "" {
+		return nil, errors.New("用户信息缺少账号标识(username/externalId/phone 至少一项)")
+	}
+	if len(ident) > 56 {
+		ident = ident[:56]
+	}
+	tenant, err := tenantSvc.GetActiveTenantByCode(strings.TrimSpace(req.TenantCode))
+	if err != nil {
+		return nil, err
+	}
+
+	candidate := ident
+	var m cs.CsMember
+	e := global.GVA_DB.Where("username = ?", candidate).First(&m).Error
+	if e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
+		return nil, e
+	}
+	if e == nil && m.TenantID != tenant.ID {
+		// 同名被其他租户占用(含软删占索引): 降级为本租户专属前缀, 再冲突则加商户码+时间后缀
+		candidate = tenant.Code + "-" + ident
+		if e = global.GVA_DB.Where("username = ?", candidate).First(&m).Error; e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
+			return nil, e
+		}
+		if e == nil && m.TenantID != tenant.ID {
+			rb := make([]byte, 4)
+			if _, err := rand.Read(rb); err != nil {
+				return nil, err
+			}
+			candidate = fmt.Sprintf("%s-%s-%s", tenant.Code, ident, hex.EncodeToString(rb))
+			if err := global.GVA_DB.Where("username = ?", candidate).First(&m).Error; err == nil {
+				return nil, errors.New("SSO 账号映射冲突, 请稍后重试")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, err
+			}
+			e = gorm.ErrRecordNotFound
+		}
+	}
+
+	nick := strings.TrimSpace(u.NickName)
+	phone := strings.TrimSpace(u.Phone)
+	if errors.Is(e, gorm.ErrRecordNotFound) {
+		// 新建: 随机密码(SSO 入口不走密码登录), 商户侧可后续在后台重置
+		pw := make([]byte, 16)
+		if _, err := rand.Read(pw); err != nil {
+			return nil, err
+		}
+		hash, err := HashPassword(hex.EncodeToString(pw))
+		if err != nil {
+			return nil, err
+		}
+		m = cs.CsMember{
+			TenantID: tenant.ID, Username: candidate, Password: hash,
+			NickName: nick, Phone: phone, Source: "SSO",
+			Status: cs.AccountStatusNormal,
+		}
+		if err := global.GVA_DB.Create(&m).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		// 复用: 刷新商户侧带过来的资料, 启用态直接登录(停用账号拒绝)
+		if m.Status != cs.AccountStatusNormal {
+			return nil, ErrAccountDisabled
+		}
+		upd := map[string]interface{}{"source": "SSO"}
+		if nick != "" {
+			upd["nick_name"] = nick
+			m.NickName = nick
+		}
+		if phone != "" {
+			upd["phone"] = phone
+		}
+		if err := global.GVA_DB.Model(&m).Updates(upd).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	token, expires, err := cstoken.CreateToken(cs.ScopeMember, m.ID, m.TenantID, m.Username, "", 0)
+	if err != nil {
+		return nil, err
+	}
+	return &csRes.MemberLoginRes{
+		CsTokenRes: csRes.CsTokenRes{Token: token, Expires: expires},
+		Tenant:     &csRes.TenantInfo{ID: tenant.ID, Code: tenant.Code, Name: tenant.Name},
+		Member: &csRes.MemberInfo{
+			ID: m.ID, TenantID: m.TenantID, Username: m.Username,
+			NickName: m.NickName, Source: m.Source,
+		},
+	}, nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func toAgentInfo(a *cs.CsAgent) *csRes.AgentInfo {

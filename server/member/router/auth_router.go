@@ -23,6 +23,8 @@ func (r *AuthRouter) InitMemberAuthRouter(PublicGroup *gin.RouterGroup) {
 	memberPublic := PublicGroup.Group("member")
 	{
 		memberPublic.POST("/login", middleware.CsRateLimit(10, time.Minute), memberAuthApi.Login)
+		// SSO 免密进入: h5 ?user= AES 参数, 解密自动建档+发令牌(未配置密钥时接口自我禁用)
+		memberPublic.POST("/sso-login", middleware.CsRateLimit(20, time.Minute), memberAuthApi.SsoLogin)
 		// 接入链接预查询: 按商户标识展示商户名/状态(公开)
 		memberPublic.GET("/tenant", middleware.CsRateLimit(30, time.Minute), memberAuthApi.TenantInfo)
 	}

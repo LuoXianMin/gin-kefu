@@ -25,3 +25,9 @@ type MemberLoginReq struct {
 	Password   string `json:"password" binding:"required"`
 	TenantCode string `json:"tenantCode" binding:"max=64"`
 }
+
+// SsoLoginReq 商户渠道免密进入: user 为 AES-256-GCM 加密的用户信息(JSON)
+type SsoLoginReq struct {
+	TenantCode string `json:"tenantCode" binding:"required,max=64"`
+	User       string `json:"user" binding:"required"`
+}

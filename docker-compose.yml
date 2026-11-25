@@ -1,6 +1,12 @@
 # gin-vue-admin 全栈依赖部署：pgsql17 + redis + mongodb + kafka + server
 # 服务间通过自定义 bridge 网络以“容器名”作为 DNS 主机名互访：
 #   pgsql -> gva-pgsql:5432   redis -> gva-redis:6379   mongo -> gva-mongo:27017   kafka -> gva-kafka:9092
+#
+# 生产/开发敏感配置全部集中在根目录 .env（参照 .env.example，compose 自动加载）：
+#   - 程序侧读取：GVA_CS_SSO_KEY/GVA_SMS_AK/GVA_SMS_SK 为 os.Getenv 原生变量；
+#     GVA_JWT_SIGNING_KEY/GVA_DB_*/GVA_REDIS_PASSWORD/GVA_MONGO_*/GVA_OSS_* 由 server/core/env_override.go
+#     在配置加载后覆盖 yaml 同名字段（未设置则用 yaml 原值）
+#   - 基础设施侧：pgsql/redis/mongo 容器的凭据与程序用同一套变量，保证不会改出双份不一致
 
 networks:
   gva-net:
@@ -13,6 +19,21 @@ volumes:
   gva-kafka-data:
   gva-server-uploads:
 
+# 三个应用进程(server/storage-worker/ws-gateway)共享的环境变量注入块
+x-app-env: &app-env
+  GVA_CS_SSO_KEY: ${GVA_CS_SSO_KEY:-} # SSO 免密进入 AES 密钥(真实值在 .env; 未配=SSO 接口自动禁用)
+  GVA_SMS_AK: ${GVA_SMS_AK:-}           # 短信通道 AK(sms.provider=http 时必需)
+  GVA_SMS_SK: ${GVA_SMS_SK:-}           # 短信通道 SK
+  GVA_JWT_SIGNING_KEY: ${GVA_JWT_SIGNING_KEY:-} # 非空则覆盖 yaml 的 jwt.signing-key(换钥=全员重登)
+  GVA_DB_USERNAME: ${GVA_DB_USERNAME:-gva}
+  GVA_DB_PASSWORD: ${GVA_DB_PASSWORD:-gva123}
+  GVA_DB_NAME: ${GVA_DB_NAME:-gva}
+  GVA_REDIS_PASSWORD: ${GVA_REDIS_PASSWORD:-}
+  GVA_MONGO_USERNAME: ${GVA_MONGO_USERNAME:-}
+  GVA_MONGO_PASSWORD: ${GVA_MONGO_PASSWORD:-}
+  GVA_OSS_ACCESS_KEY_ID: ${GVA_OSS_ACCESS_KEY_ID:-}     # 按 system.oss-type 覆盖对应 OSS 段的 AK/SK
+  GVA_OSS_ACCESS_KEY_SECRET: ${GVA_OSS_ACCESS_KEY_SECRET:-}
+
 services:
   # ---------------------------------------------------------------------------
   # PostgreSQL 17（服务端主库，db-type: pgsql）
@@ -24,12 +45,12 @@ services:
     ports:
       - "15432:5432"
     environment:
-      POSTGRES_USER: gva
-      POSTGRES_PASSWORD: gva123
-      POSTGRES_DB: gva
+      POSTGRES_USER: ${GVA_DB_USERNAME:-gva}
+      POSTGRES_PASSWORD: ${GVA_DB_PASSWORD:-gva123}
+      POSTGRES_DB: ${GVA_DB_NAME:-gva}
       TZ: Asia/Shanghai
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gva -d gva"]
+      test: ["CMD-SHELL", "pg_isready -U ${GVA_DB_USERNAME:-gva} -d ${GVA_DB_NAME:-gva}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -40,6 +61,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Redis（system.use-redis: true）
+  # GVA_REDIS_PASSWORD 非空则开启 requirepass（需同步 .env，程序侧由 env_override 覆盖 yaml）
   # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
@@ -47,8 +69,11 @@ services:
     restart: always
     ports:
       - "16379:6379"
+    environment:
+      GVA_REDIS_PASSWORD: ${GVA_REDIS_PASSWORD:-}
+    command: sh -c 'exec redis-server --requirepass "$${GVA_REDIS_PASSWORD}"'
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG || exit 1"]
+      test: ["CMD-SHELL", 'redis-cli $${GVA_REDIS_PASSWORD:+-a "$${GVA_REDIS_PASSWORD}" --no-auth-warning} ping | grep PONG || exit 1']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -58,7 +83,9 @@ services:
       gva-net:
 
   # ---------------------------------------------------------------------------
-  # MongoDB（system.use-mongo: true，未开启鉴权）
+  # MongoDB（system.use-mongo: true）
+  # GVA_MONGO_USERNAME/PASSWORD 两者均非空时开启 root 鉴权（仅对首次初始化数据卷生效，
+  # 已有无鉴权卷需手动 createUser + authorization enabled 后才能配合 .env 启用）
   # ---------------------------------------------------------------------------
   mongo:
     image: mongo:7
@@ -68,6 +95,8 @@ services:
       - "27018:27017"
     environment:
       MONGO_INITDB_DATABASE: gva
+      MONGO_INITDB_ROOT_USERNAME: ${GVA_MONGO_USERNAME:-}
+      MONGO_INITDB_ROOT_PASSWORD: ${GVA_MONGO_PASSWORD:-}
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' || exit 1"]
       interval: 10s
@@ -134,6 +163,8 @@ services:
         condition: service_healthy
       mongo:
         condition: service_healthy
+    environment:
+      <<: *app-env
     volumes:
       - ./server/config.docker.yaml:/go/src/github.com/flipped-aurora/gin-vue-admin/server/config.docker.yaml:ro
       - gva-server-uploads:/go/src/github.com/flipped-aurora/gin-vue-admin/server/uploads
@@ -162,6 +193,8 @@ services:
     container_name: gva-storage-worker
     restart: always
     entrypoint: ["./storage-worker", "-c", "config.docker.yaml"]
+    environment:
+      <<: *app-env
     depends_on:
       server:
         condition: service_started
@@ -180,6 +213,8 @@ services:
     container_name: gva-ws-gateway
     restart: always
     entrypoint: ["./ws-gateway", "-c", "config.docker.yaml"]
+    environment:
+      <<: *app-env
     ports:
       - "8889:8889"
     depends_on:

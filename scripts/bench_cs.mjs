@@ -60,7 +60,7 @@ async function merchantLogin(username, password) {
 }
 
 async function memberLogin(username, password) {
-  const r = await jpost('/member/login', { username, password })
+  const r = await jpost('/member/login', { username, password, tenantCode: 'demo' })
   if (r.code !== 0) throw new Error('member login: ' + r.msg)
   return r.data.token
 }

@@ -30,11 +30,16 @@ func Viper() *viper.Viper {
 		fmt.Println("config file changed:", e.Name)
 		if err = v.Unmarshal(&global.GVA_CONFIG); err != nil {
 			fmt.Println(err)
+			return
 		}
+		// 热重载会用 yaml 原值覆盖, 需重新应用环境变量优先级
+		ApplyEnvOverrides()
 	})
 	if err = v.Unmarshal(&global.GVA_CONFIG); err != nil {
 		panic(fmt.Errorf("fatal error unmarshal config: %w", err))
 	}
+	// 生产敏感配置(JWT/数据库/Redis/Mongo/OSS)允许由环境变量覆盖, 未设置则用 yaml 原值
+	ApplyEnvOverrides()
 
 	// root 适配性 根据root位置去找到对应迁移位置,保证root路径有效
 	global.GVA_CONFIG.AutoCode.Root, _ = filepath.Abs("..")

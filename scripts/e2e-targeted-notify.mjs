@@ -57,7 +57,7 @@ async function freshConversation(MT, AT1, AT2) {
 
 async function main() {
   console.log('[1] 登录三端')
-  const m = await jpost('/member/login', { username: 'member001', password: '123456' })
+  const m = await jpost('/member/login', { username: 'member001', password: '123456', tenantCode: 'demo' })
   if (!m.data?.token) return bad('member 登录失败', JSON.stringify(m))
   const MT = m.data.token
   const AT1 = await agentLogin('agent001')
