@@ -8,6 +8,7 @@
 !.env.example
 .env.local
 .env.*.local
+.env*
 
 # Log files
 npm-debug.log*
@@ -46,3 +47,11 @@ web/pnpm-lock.yaml
 *.sqlite3
 worktrees/
 web
+merchant-web
+chat-web
+
+# 本机实值环境变量文件(含真实密钥, 不入库)
+.envtest
+# 本机交叉编译产物(勿混入 Linux 部署)
+server/storage-worker
+server/ws-gateway
