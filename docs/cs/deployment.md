@@ -155,6 +155,23 @@ sso:
 - AK/SK 推荐走 `.env` 的 `GVA_OSS_ACCESS_KEY_ID/GVA_OSS_ACCESS_KEY_SECRET`（按 oss-type 自动落到对应段，yaml 只留 endpoint/bucket 等非敏感项）；若仍写在 yaml，**切勿把真实凭证提交进 git**
 - `local` 模式存储目录 `local.path: uploads/file`（compose 已用具名卷 `gva-server-uploads` 持久化）
 
+**客服附件（图片/文件）切 OSS 的三个耦合点**
+
+1. 上传统一走 `service/cs/file_service.go` → `upload.NewOss()`，落哪里完全由 `system.oss-type` 决定，业务代码不感知。但 `NewOss()` 的 **`default` 分支静默回落 `Local`**（`utils/upload/upload.go:43`）——`oss-type` 写错（如误填 `aliyun`）不报错、不降级提示，图片继续存容器盘。切换后必须实测确认，不能只看配置。
+2. 下载统一走 HMAC 短链 `/cs/files/dl`，服务端按 `CsFileAttachment.FilePath` 形态分流：本地路径 → `c.File()`；`http(s)://` → **302 重定向到带时效的 OSS 签名直链**（`upload.SignRemoteURL`，签名时长对齐短链剩余寿命 `exp`，不让 302 目标比授权活得更久）。图片不附 disposition 以命中 OSS/CDN 缓存，其余附件借 `oss.ResponseContentDisposition` option 保住“另存为 + 原始文件名”——**该参数必须走 SDK option 参与签名**，手工拼到已签名 URL 后面会因子资源不匹配返回 403。因此**切 OSS 无需数据迁移**，历史 local 记录照常可读，前端 `getFileUrl` 零改动。
+3. 因为 302 目标是签名链，**桶不要求公共读，建议设为私有**（签名对私有对象同样有效，且可彻底消除“直链被转发则永久可访问”的隐私风险）。若桶为公共读，签名链与裸链都能访问；若改为非阿里云后端（如 minio）则不具备签名能力，会回退裸链 + query 形式的 `response-content-disposition`，此时才需要公共读。
+
+object key 唯一性：阿里云实现用**原始文件名**拼 key（`utils/upload/aliyun_oss.go:31`），同名文件会互相覆盖导致历史消息串图；客服域已在调用前把 `file.Filename` 换为内容 sha256 前 24 位（同内容同 key 覆盖无害，已被秒传判重拦截），原始名留存于 `FileName` 字段供展示与下载。
+
+校验（真实写﹢读回﹢删一个探针对象，默认 skip）：
+
+```bash
+cd server && set -a && . ../.env && set +a \
+  && GVA_OSS_LIVE=1 go test ./utils/upload/ -run TestAliyunOssLiveUploadRoundTrip -v
+```
+
+命中“已上传 … url=https://…”、“签名直链可用”、“OSS 回显 Content-Disposition”与“删除后状态码 404”即证明凭证、endpoint、bucket、base-path 全部正确。其中签名直链一项尤其关键：SDK 会把 object key 里的 `/` 编码为 `%2F`，**只有实测 200 才能确认 OSS 解码回原对象**（否则 302 到签名链会全面裂图，而这一点在配置和代码里都看不出来）；用例还会断言 `NewOss()` 真的分派到 `AliyunOSS`（上面第 1 点的静默回落会被它拦住）。
+
 **⑤ 数据库/中间件凭据（现均已在 `.env` 集中，yaml 里的开发值仅作未覆盖时的兜底）**
 ```env
 # 根目录 .env
@@ -210,4 +227,7 @@ GVA_OSS_TYPE=aliyun-oss      # 与 GVA_OSS_ACCESS_KEY_ID/SECRET 自动配套
 | 脚本收到 "404 page not found" 文本 | 平台端前缀是 `/cs/platform/*` 而非 `/platform/*`；先探 http_code 再解析 JSON |
 | 8889 根路径 HTTP 404 | 正常，ws-gateway 只支持 `/ws` upgrade 握手 |
 | ws 连接立即失败 | URL 必须带 `?token=`，网关握手阶段强校验 |
+| 切了 `GVA_OSS_TYPE=aliyun-oss` 但图片仍存容器 `uploads/` | `oss-type` 取值拼错，被 `NewOss()` 的 `default` 静默回落 local（不报错）；正确值是 `aliyun-oss`，用 §6.2④ 的 live 用例验证 |
+| 图片切 OSS 后前端裂图 | 先看 302 的 `Location` 返回值：`SignatureDoesNotMatch`=子资源未参与签名（必须走 `oss.ResponseContentDisposition` option）；`NoSuchKey`=key 拼接/base-path 错；`AccessDenied`=非 aliyun 后端回退了裸链而桶是私有 |
+| `https://kfapi…/ws` 握手失败但网关 `/healthz` 200 | 边缘反代（1Panel/OpenResty）缺 `location /ws`，请求落到主服务返回 Gin 纯文本 404；转发后应返回 **401 unauthorized**（网关拒假 token）即代表链路已通 |
 | mongo 连不上但服务照常起 | mongo 初始化失败不致命，需 grep 启动日志"链接mongodb数据库失败"确认 |

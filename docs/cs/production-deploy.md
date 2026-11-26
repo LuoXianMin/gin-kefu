@@ -23,7 +23,7 @@
 - Linux + Docker ≥ 24（compose v2）；单实例参考配置 4C8G
 - 域名与证书：API 域（如 `api.example.com`）、WS 域（可同域，需 upgrade 透传）、三端静态站点
 - 短信通道：阿里云短信已审核通过的**签名 + 模板 Code + AK/SK**（`provider=aliyun` 模式，无需 SDK）；若用自建短信网关则走 `provider=http`（约定 HMAC-SHA256 报文，非阿里云 OpenAPI）
-- 对象存储桶（若 `oss-type` 非 local）
+- 对象存储桶：客服附件（图片/文件）生产走 `oss-type: aliyun-oss`。下载层 302 到**带时效的 OSS 签名直链**，因此**建议把桶设为私有**（消除“公共读直链被转发则永久可访问”的隐私风险）；非敏感项（endpoint/bucket-name/bucket-url/base-path）只能在 yaml 的 `aliyun-oss:` 段配，`.env` 仅覆盖 AK/SK
 
 ## 2. 集中配置：`.env`（唯一密钥入口）
 
@@ -53,7 +53,7 @@ cp .env.example .env && chmod 600 .env
 | `GVA_ZAP_LEVEL` | `warn` | 生产日志级别 |
 | `GVA_DISABLE_AUTO_MIGRATE` | `true`（若手动迁移） | 否则保持 AutoMigrate 自动建表 |
 | `GVA_SSO_MAX_AGE_SEC` | `300` | SSO 链接时效防重放（0/留空=不校验） |
-| `GVA_OSS_TYPE` / `GVA_DB_TYPE` | 按选型 | 非空覆盖 yaml 同名项，与 AK/SK、DB 凭据自动配套 |
+| `GVA_OSS_TYPE` / `GVA_DB_TYPE` | 按选型（OSS 生产填 `aliyun-oss`） | 非空覆盖 yaml 同名项，与 AK/SK、DB 凭据自动配套。❗ OSS 取值必须**精确等于** `aliyun-oss`，写错会被 `NewOss()` 的 `default` 静默回落 local（不报错，图片仍存容器盘） |
 | `GVA_KAFKA_BROKERS` | 集群地址 | 逗号分隔；换生产 Kafka 无需改 yaml |
 
 > 改 `.env` 后执行 `docker compose up -d`，compose 自动重建 env 变化的容器。
@@ -140,7 +140,7 @@ node scripts/e2e-targeted-notify.mjs      # 6 项定向提醒
 
 ## 8. 运维
 
-- **备份**：`pg_dump`（每日）+ mongo `mongodump`（消息库）+ 具名卷 `gva-server-uploads`（local OSS 文件）；Redis 为可重建缓存（限流/验证码态），不作备份要求
+- **备份**：`pg_dump`（每日）+ mongo `mongodump`（消息库）+ 对象存储桶（`oss-type=aliyun-oss` 后附件主体在此）；具名卷 `gva-server-uploads` 仅承载切换前的历史 local 文件，仍需保留备份；Redis 为可重建缓存（限流/验证码态），不作备份要求
 - **日志**：`docker compose logs -f server`；级别可用 `.env` 的 `GVA_ZAP_LEVEL` 调（生产建议 warn）
 - **升级**：`git pull && docker compose build server && docker compose up -d`（三应用进程共享镜像，一并重建）；DB 迁移由 GORM AutoMigrate 自动执行，升级前备份
 - **令牌吊销**：当前无主动吊销通道（7d 过期），泄露处置=轮换 `GVA_JWT_SIGNING_KEY`（全员重登）

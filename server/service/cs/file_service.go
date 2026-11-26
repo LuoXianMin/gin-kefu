@@ -86,6 +86,11 @@ func (s *FileService) Upload(tenantID uint, uploaderType string, uploaderID, con
 		return nil, ErrUploadDuplicate
 	}
 
+	// 存储名改用内容 sha256: 阿里云 OSS 的 object key 由原始文件名直接拼成
+	// (utils/upload/aliyun_oss.go:31), 同名文件会互相覆盖导致历史消息串图; local 模式用随机名不受影响。
+	// 同内容同 key 覆盖无害(同会话同内容已被上面的秒传判重拦截)。原始名先行留存, 供展示与下载文件名使用。
+	origName := filepath.Base(file.Filename)
+	file.Filename = sha[:24] + ext
 	path, stored, err := upload.NewOss().UploadFile(file)
 	if err != nil {
 		return nil, err
@@ -93,7 +98,7 @@ func (s *FileService) Upload(tenantID uint, uploaderType string, uploaderID, con
 	rec := cs.CsFileAttachment{
 		TenantID: tenantID, ConversationID: convID,
 		UploaderType: uploaderType, UploaderID: uploaderID,
-		FileName: filepath.Base(file.Filename), StoredName: stored, FilePath: path,
+		FileName: origName, StoredName: stored, FilePath: path,
 		Size: file.Size, MimeType: file.Header.Get("Content-Type"), SHA256: sha,
 		ScanStatus: cs.FileScanPending,
 	}
