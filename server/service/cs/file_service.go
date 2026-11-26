@@ -152,7 +152,7 @@ func (s *FileService) IssueDownloadURL(tenantID uint, scope string, accountID, f
 	sig := signFileURL(fileID, exp)
 	return &csRes.FileURLRes{
 		FileID: fileID, FileName: file.FileName,
-		URL:     fmt.Sprintf("/cs/files/dl?fid=%d&exp=%d&sig=%s", fileID, exp, sig),
+		URL:      fmt.Sprintf("/cs/files/dl?fid=%d&exp=%d&sig=%s", fileID, exp, sig),
 		ExpireAt: time.Unix(exp, 0).UTC(),
 	}, nil
 }

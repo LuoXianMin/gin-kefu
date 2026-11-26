@@ -44,7 +44,7 @@ func (s *SmsCodeService) genCode(length int) string {
 	for i := 0; i < length; i++ {
 		n, err := rand.Int(rand.Reader, big.NewInt(10))
 		if err != nil {
-			n = big.NewInt(int64(time.Now().UnixNano()%10))
+			n = big.NewInt(int64(time.Now().UnixNano() % 10))
 		}
 		b = append(b, byte('0'+n.Int64()))
 	}

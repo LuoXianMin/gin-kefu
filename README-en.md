@@ -117,6 +117,7 @@ node scripts/bench_cs.mjs                 # message-pipeline QPS benchmark (bott
 - [docs/cs/test-report.md](docs/cs/test-report.md) — acceptance and QPS benchmark report with bottleneck analysis
 - [docs/cs/security-ratelimit.md](docs/cs/security-ratelimit.md) — security & rate-limit report (token domains / tenant isolation / file pipeline / limit table / anti-brute-force and known gaps)
 - [docs/cs/sso-php.md](docs/cs/sso-php.md) — PHP integration guide for SSO passwordless entry (AES-256-GCM spec / samples / self-check)
+- [docs/cs/production-deploy.md](docs/cs/production-deploy.md) — production deployment handbook (.env-centralized config, launch steps, security checklist, ops & rollback)
 - [aiDoc/](aiDoc/README.md) — module rules, memory and relation maps oriented at AI-assisted collaboration
 
 ## Development Conventions

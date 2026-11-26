@@ -76,6 +76,8 @@ DELETE FROM cs_conversations WHERE title='BENCH';
 
 ## 6. 生产部署配置清单
 
+> 运维视角的完整上线步骤（含初始化/nginx/核对清单/回滚）见 [production-deploy.md](production-deploy.md)，本节聚焦配置分布与逐项必改说明。
+
 ### 6.1 配置文件四层结构
 
 | 层 | 文件 | 说明 |
@@ -83,7 +85,7 @@ DELETE FROM cs_conversations WHERE title='BENCH';
 | **敏感配置单一来源** | **根目录 `.env`**（模板 `.env.example`，已 gitignore） | 所有密钥/口令集中于此，`docker compose` 启动时自动加载；生产 `cp .env.example .env` 填真实值 |
 | 后端主配置 | **`server/config.docker.yaml`** | 容器实际生效入口（compose `:ro` bind-mount 覆盖镜像内同名文件）；非敏感项在此，敏感项可被 `.env` 覆盖（见 6.2）；改完 `docker compose restart server` 即生效 |
 | 环境变量注入 | 根 `docker-compose.yml` 的 `x-app-env` 锚点 | server/storage-worker/ws-gateway 三进程共享同一套 `${GVA_*}` 插值；pgsql/redis/mongo 容器凭据与程序用同源变量，不会改出不一致 |
-| 前端构建变量 | `web/.env.production`、`chat-web/.env.production`、`merchant-web/.env.production` | 生产为静态产物，改配置 = 重新 `npm run build`；`VITE_BASE_API=/api` 配合 nginx 反代 |
+| 前端构建变量 | `web/.env.production`、`chat-web/.env.production`、`merchant-web/.env.production` | 生产为静态产物，改配置 = 重新 `npm run build`；**直连模式**：API base 填后端绝对域名（`VITE_API_BASE`/`VITE_BASE_API`=`https://kfapi.laigoushangcheng.cn`，不带 `/api`），与后端同域同源不走反代 |
 
 **env 覆盖机制**（`server/core/env_override.go`，三进程均经 `core.Viper()` 生效）：配置加载后按下列环境变量**非空则覆盖** yaml 同名字段，未设置完全保持 yaml 原值（向后兼容）：
 
@@ -94,6 +96,17 @@ DELETE FROM cs_conversations WHERE title='BENCH';
 | `GVA_REDIS_PASSWORD` | `redis.password`；非空时 compose 的 redis 容器同时自动开启 `requirepass` |
 | `GVA_MONGO_USERNAME/PASSWORD` | `mongo` 认证；两者均非空时 mongo 容器启用 root 鉴权（**仅对全新数据卷生效**，存量卷需手动 `createUser`+`setFeatureCompatibilityVersion` 开 auth） |
 | `GVA_OSS_ACCESS_KEY_ID/SECRET` | 按 `system.oss-type` 覆盖对应 OSS 段（aliyun/minio/qiniu/tencent/aws/cloudflare/huawei 全支持；local 无凭据） |
+| `GVA_SMS_PROVIDER/ENDPOINT/SIGN_NAME/TEMPLATE_CODE/TEMPLATE_PARAM_KEY/REGION` | `sms` 段的发送通道与模板配置（生产无需改 yaml，整段可在 `.env` 配齐） |
+| `GVA_SMS_DEV_RETURN_CODE` | `sms.dev-return-code`（bool）；**生产必设 false**，留空用 yaml 值 |
+| `GVA_SYSTEM_ENV` | `system.env`（`local`/`public`）；`public`=图形验证码不回显答案 |
+| `GVA_DB_TYPE` / `GVA_OSS_TYPE` | `system.db-type` / `system.oss-type`（**先于**主库凭据与 OSS AK/SK 生效，自动落到新类型对应段） |
+| `GVA_ROUTER_PREFIX` | `system.router-prefix`（改动需同步前端三端与 e2e 脚本） |
+| `GVA_ZAP_LEVEL` | `zap.level`（`debug`/`info`/`warn`/`error`） |
+| `GVA_DISABLE_AUTO_MIGRATE` | `system.disable-auto-migrate`（bool，生产改 true 走手动迁移） |
+| `GVA_SSO_MAX_AGE_SEC` | `sso.max-age-sec`（int 秒，>0 校验 SSO 链接 `ts` 时效，防重放） |
+| `GVA_OPEN_CAPTCHA` | `captcha.open-captcha`（int，0=每次登录都要图形码，>0=错 N 次后出码） |
+| `GVA_KAFKA_ENABLED` / `GVA_KAFKA_BROKERS` | `kafka.enabled`（bool）/ `kafka.brokers`（逗号分隔列表） |
+| `GIN_MODE` | gin 运行模式（`debug`/`release`，compose 直接注入 `${GIN_MODE:-debug}`，非覆盖机制） |
 | `GVA_CS_SSO_KEY` | SSO AES 密钥（程序 `os.Getenv` 原生读取，非覆盖机制） |
 | `GVA_SMS_AK/SK` | 短信凭证（同上，env 名由 `sms.access-key-env/secret-key-env` 指定） |
 
@@ -110,15 +123,24 @@ jwt:
 ```
 推荐不在 yaml 填真实值，改用根目录 `.env` 的 `GVA_JWT_SIGNING_KEY` 覆盖（见 6.1 机制表）。所有令牌域（框架 + cstoken）与文件下载 HMAC 短链均由它派生；更换后旧令牌全部失效（全员重登）。
 
-**② 短信（L115-127）**
-```yaml
-sms:
-    provider: log           # → http（通用HTTP网关）
-    endpoint: ""            # → 短信网关地址
-    sign-name / template-code   # → 短信签名与模板 Code
-    dev-return-code: true   # → 必须 false！否则验证码直接回显，等同 MFA 旁路
+**② 短信（L115-129）**
+整段已可在 `.env` 配置而不动 yaml（非空即覆盖同名 yaml 项）：
+```env
+GVA_SMS_PROVIDER=aliyun        # 开发 yaml 为 log(只写日志不真发); aliyun=真发阿里云短信
+GVA_SMS_ENDPOINT=              # aliyun 留空即用 https://dysmsapi.aliyuncs.com; http 模式才必填
+GVA_SMS_SIGN_NAME=<签名>
+GVA_SMS_TEMPLATE_CODE=<模板Code>
+GVA_SMS_TEMPLATE_PARAM_KEY=code # 必须与模板正文里的 ${xxx} 一致, 否则 isv.TEMPLATE_PARAMS_ILLEGAL
+GVA_SMS_REGION=                # 留空=cn-hangzhou
+GVA_SMS_DEV_RETURN_CODE=false  # 必须！留空则沿用 yaml 的 true，等同 MFA 旁路
+GVA_SMS_AK= / GVA_SMS_SK=      # 阿里云 AccessKey（程序按 sms.access-key-env/secret-key-env 指定的变量名读）
 ```
-AK/SK 不落文件：`access-key-env: GVA_SMS_AK`、`secret-key-env: GVA_SMS_SK` 指定**环境变量名**，密钥值由部署环境注入。
+yaml 内保留的 `provider: log`/`dev-return-code: true` 仅作开发兜底，生产以 `.env` 为准。
+
+两个易踩点（已经代码核实）：
+- **`provider=log` 时接口仍返回 `code:0 验证码已发送`**，但实际未发起任何外呼（仅 `LogProvider` 写一条 Info 日志）；若生产 `GVA_ZAP_LEVEL=warn`，连那条日志都看不到，极像“发送成功但丢短信”。
+- **`provider=http` 不是阿里云**：它按自定义协议 POST `{phone,code,sign,tpl}` + `X-Access-Key/X-Timestamp/X-Signature`（HMAC-SHA256），接阿里云端点会直接签名失败；阿里云请用 `provider=aliyun`（OpenAPI RPC 签名 HMAC-SHA1，无 SDK 依赖）。
+可用 `GVA_SMS_LIVE=1 go test ./service/cs/ -run TestAliyunLiveSignatureAccepted -v` 校验凭证与签名（用例传非法号格式，不计费也不会发出短信，返回 `isv.MOBILE_NUMBER_ILLEGAL` 即证明签名被阿里云接受）。
 
 **③ SSO AES 密钥（L103-105）**
 ```yaml
@@ -133,27 +155,34 @@ sso:
 - AK/SK 推荐走 `.env` 的 `GVA_OSS_ACCESS_KEY_ID/GVA_OSS_ACCESS_KEY_SECRET`（按 oss-type 自动落到对应段，yaml 只留 endpoint/bucket 等非敏感项）；若仍写在 yaml，**切勿把真实凭证提交进 git**
 - `local` 模式存储目录 `local.path: uploads/file`（compose 已用具名卷 `gva-server-uploads` 持久化）
 
-**⑤ 数据库/中间件凭据（现均已在 `.env` 集中，yaml 里的开发值仅作未覆盖时的兑底）**
+**⑤ 数据库/中间件凭据（现均已在 `.env` 集中，yaml 里的开发值仅作未覆盖时的兜底）**
 ```env
 # 根目录 .env
 GVA_DB_USERNAME=gva / GVA_DB_PASSWORD=gva123 / GVA_DB_NAME=gva   # → 生产强密码(与 pgsql 容器同源)
 GVA_REDIS_PASSWORD=          # → 非空即启用 redis 容器 requirepass + 程序同步生效
 GVA_MONGO_USERNAME= / GVA_MONGO_PASSWORD=   # → 非空即启用 mongo root 鉴权(仅全新卷生效)
 ```
-compose 的 pgsql `POSTGRES_USER/PASSWORD/DB`、redis `requirepass`、mongo `MONGO_INITDB_ROOT_*` 与上表是**同一组变量**，改 `.env` 一处即全栈同步。kafka brokers 仍在 yaml（非敏感）；`db-list` 多库段不支持 env 覆盖。
+compose 的 pgsql `POSTGRES_USER/PASSWORD/DB`、redis `requirepass`、mongo `MONGO_INITDB_ROOT_*` 与上表是**同一组变量**，改 `.env` 一处即全栈同步（mongo 两项已去掉 compose 明文兜底：留空=无鉴权开发态，与程序/容器严格同源）。kafka brokers 可用 `GVA_KAFKA_BROKERS` 覆盖；`db-list` 多库段不支持 env 覆盖。⚠️ mongo 鉴权**仅对全新数据卷生效**——若在已有存量卷时设置过凭据后又想回退无鉴权开发态，需 `docker volume rm <project>_gva-mongo-data` 重建（卷内有 admin 用户则 mongod 强制鉴权，清空前注意消息数据）。
 
-**⑥ 系统开关（L85-100）**
-- `system.env: local` → `public`（关闭路由日志输出）
+**⑥ 系统开关（L85-100）——已全部可经 `.env` 覆盖，生产无需改 yaml**
+```env
+GVA_SYSTEM_ENV=public        # 关闭图形码答案回显
+GIN_MODE=release             # 关 gin 路由日志
+GVA_ZAP_LEVEL=warn           # 生产日志级别
+GVA_DISABLE_AUTO_MIGRATE=true# 生产建议手动迁移表结构
+GVA_SSO_MAX_AGE_SEC=300      # SSO 链接时效防重放
+GVA_OSS_TYPE=aliyun-oss      # 与 GVA_OSS_ACCESS_KEY_ID/SECRET 自动配套
+```
 - `use-redis/use-mongo: true` 不能关（客服链路强依赖）；`db-type: pgsql` 保持
-- `system.router-prefix` 若 nginx 要加前缀在此改，**前端三端 API 路径与 e2e 脚本需同步**
-- `captcha.open-captcha`、`iplimit-*` 按业务复核
+- `system.router-prefix` 若 nginx 要加前缀改 `GVA_ROUTER_PREFIX`，**前端三端 API 路径与 e2e 脚本需同步**
+- `captcha.open-captcha`（`GVA_OPEN_CAPTCHA`）、`iplimit-*` 按业务复核
 
 ### 6.3 敏感凭证现状与处置速查
 
 | 凭证 | 现在在哪 | 生产动作 |
 |---|---|---|
 | JWT signing-key | yaml L5 默认 `qmPlus`；可被 `.env` `GVA_JWT_SIGNING_KEY` 覆盖 | `.env` 填强随机 |
-| 短信 AK/SK | `.env` `GVA_SMS_AK/GVA_SMS_SK`（log 模式未用到） | 部署环境注入 |
+| 短信 AK/SK 与模板配置 | `.env` `GVA_SMS_AK/SK/PROVIDER/ENDPOINT/SIGN_NAME/TEMPLATE_CODE/TEMPLATE_PARAM_KEY/REGION/DEV_RETURN_CODE` | 部署环境注入 |
 | SSO AES 密钥 | `.env` `GVA_CS_SSO_KEY`（开发值；compose 不再写死明文） | `.env` 换生产密钥 |
 | pgsql 密码 | `.env` `GVA_DB_PASSWORD`（与 pgsql 容器同源） | `.env` 改强密码一处生效 |
 | OSS AK/SK | `.env` `GVA_OSS_ACCESS_KEY_ID/SECRET`（按 oss-type 落段） | `.env` 填真实值 |
@@ -173,6 +202,8 @@ compose 的 pgsql `POSTGRES_USER/PASSWORD/DB`、redis `requirepass`、mongo `MON
 | 症状 | 根因/处置 |
 |---|---|
 | 容器 Up 但 `lookup gva-xxx no such host` | 宿主端口冲突致未入网：docker inspect Networks 为 `{}` → 改 ports 映射 + force-recreate |
+| 接口回"验证码已发送"但手机没收到 | `sms.provider` 仍为 `log`（只写日志不真发），生产需 `GVA_SMS_PROVIDER=aliyun` 并重建/restart |
+| 短信报 `isv.TEMPLATE_PARAMS_ILLEGAL` | `GVA_SMS_TEMPLATE_PARAM_KEY` 与阿里云模板正文变量名不一致（模板写 `${code}` 则填 `code`） |
 | 登录报"发送过于频繁" | 短信 60s per-账号冷却，清 `cs:sms:last:*` |
 | 登录报"请求过于频繁" | 登录 10/min/IP 限流（容器内看到的 IP 是 docker 网关如 192.168.32.1），清 `cs:rl:*login*` |
 | 业务接口 401"无效令牌" | 用了别端 token（令牌域隔离是特性不是 bug）或误走框架 JWTAuth 路由 |

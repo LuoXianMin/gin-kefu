@@ -118,12 +118,14 @@ captcha:
 # sms 短信验证码配置(客服系统三端 MFA 登录)
 # 生产凭证通过环境变量注入(access-key-env/secret-key-env 指定变量名)，严禁写入仓库/日志/镜像
 sms:
-    provider: log # log: 开发环境验证码写日志; http: 通用HTTP网关
-    endpoint: "" # http 模式短信网关地址
+    provider: log # log: 开发环境验证码写日志; aliyun: 真发阿里云短信; http: 自定义HMAC网关
+    endpoint: "" # http 模式短信网关地址; aliyun 留空用 https://dysmsapi.aliyuncs.com
     access-key-env: GVA_SMS_AK # 读取 AK 的环境变量名
     secret-key-env: GVA_SMS_SK # 读取 SK 的环境变量名
     sign-name: "" # 短信签名
     template-code: "" # 短信模板 Code
+    region: "" # aliyun 地域, 留空=cn-hangzhou
+    template-param-key: "" # aliyun 模板验证码变量名, 留空=code
     code-length: 6 # 验证码位数
     code-ttl-seconds: 300 # 验证码有效期(秒)
     send-time-limit: 60 # 同一账号发送间隔(秒)
@@ -305,6 +307,28 @@ disk-list:
 cors:
     mode: strict-whitelist # 放行模式: allow-all, 放行全部; whitelist, 白名单模式, 来自白名单内域名的请求添加 cors 头; strict-whitelist 严格白名单模式, 白名单外的请求一律拒绝
     whitelist:
+        # 本机开发源(go run 直起时 vite 代理透传的 Origin, 浏览器同源 POST 也带 Origin)
+        - allow-origin: http://localhost:*
+          allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
+          allow-methods: POST, GET, OPTIONS, DELETE, PUT
+          expose-headers: Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, New-Token, New-Expires-At
+          allow-credentials: true
+        - allow-origin: http://127.0.0.1:*
+          allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
+          allow-methods: POST, GET, OPTIONS, DELETE, PUT
+          expose-headers: Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, New-Token, New-Expires-At
+          allow-credentials: true
+        # 生产直连前端源(与 config.docker.yaml 保持一致)
+        - allow-origin: http://*.laigoushangcheng.cn
+          allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
+          allow-methods: POST, GET, OPTIONS, DELETE, PUT
+          expose-headers: Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, New-Token, New-Expires-At
+          allow-credentials: true
+        - allow-origin: https://*.laigoushangcheng.cn
+          allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
+          allow-methods: POST, GET, OPTIONS, DELETE, PUT
+          expose-headers: Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, New-Token, New-Expires-At
+          allow-credentials: true
         - allow-origin: example1.com
           allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
           allow-methods: POST, GET

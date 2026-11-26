@@ -67,8 +67,8 @@ async function main() {
   console.log('[2] 场景A: 会话已由 agent001 接待, 访客消息只定向提醒 agent001')
   const g1 = new WsHandle(AT1, 'agent001-global')
   const g2 = new WsHandle(AT2, 'agent002-global')
-  await g1.opened
-  await g2.opened
+  await Promise.race([g1.opened, sleep(8000)])
+  await Promise.race([g2.opened, sleep(8000)])
   g1.subTenant()
   g2.subTenant()
   await sleep(300)

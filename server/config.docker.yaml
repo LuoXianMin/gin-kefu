@@ -102,7 +102,7 @@ system:
 # SSO 渠道免密进入(客服系统 h5 ?user= AES 参数)
 sso:
     aes-key-env: GVA_CS_SSO_KEY # 密钥由 compose environment 注入; 未注入=接口拒绝服务
-    max-age-sec: 0 # 明文 ts 字段允许的最大时效(秒), 0=不校验时效
+    max-age-sec: 3600 # 明文 ts 字段允许的最大时效(秒), 0=不校验时效
 # captcha configuration
 captcha:
     key-long: 6
@@ -113,12 +113,14 @@ captcha:
 
 # sms 短信验证码配置(客服系统三端 MFA 登录) 开发 Compose 环境: log 通道 + 返回验证码
 sms:
-    provider: log
-    endpoint: ""
+    provider: log           # log=仅写日志不真发(开发默认) | aliyun=真发阿里云短信 | http=自定义 HMAC 网关
+    endpoint: ""            # http 必填; aliyun 留空则用 https://dysmsapi.aliyuncs.com
     access-key-env: GVA_SMS_AK
     secret-key-env: GVA_SMS_SK
     sign-name: ""
     template-code: ""
+    region: ""              # aliyun 地域, 留空=cn-hangzhou
+    template-param-key: ""  # aliyun 模板验证码变量名, 留空=code
     code-length: 6
     code-ttl-seconds: 300
     send-time-limit: 60
@@ -214,43 +216,14 @@ autocode:
     module: 'github.com/flipped-aurora/gin-vue-admin/server'
     ai-path: ""  # AI服务路径
 
-# qiniu configuration (请自行七牛申请对应的 公钥 私钥 bucket 和 域名地址)
-qiniu:
-    zone: ZoneHuaDong
-    bucket: ""
-    img-path: ""
-    use-https: false
-    access-key: ""
-    secret-key: ""
-    use-cdn-domains: false
-
-# minio oss configuration
-minio:
-    endpoint: yourEndpoint
-    access-key-id: yourAccessKeyId
-    access-key-secret: yourAccessKeySecret
-    bucket-name: yourBucketName
-    use-ssl: false
-    base-path: ""
-    bucket-url: "http://host:9000/yourBucketName"
-
 # aliyun oss configuration
 aliyun-oss:
-    endpoint: yourEndpoint
-    access-key-id: yourAccessKeyId
-    access-key-secret: yourAccessKeySecret
-    bucket-name: yourBucketName
-    bucket-url: yourBucketUrl
-    base-path: yourBasePath
-
-# tencent cos configuration
-tencent-cos:
-    bucket: xxxxx-10005608
-    region: ap-shanghai
-    secret-id: your-secret-id
-    secret-key: your-secret-key
-    base-url: https://gin.vue.admin
-    path-prefix: github.com/flipped-aurora/gin-vue-admin/server
+    endpoint: https://oss-cn-beijing.aliyuncs.com
+    access-key-id: ''      # 真实值走 .env GVA_OSS_ACCESS_KEY_ID(按 oss-type 自动落到本段)
+    access-key-secret: ''  # 同上 GVA_OSS_ACCESS_KEY_SECRET; 此处清空后若 env 未注入则上传会明确报错, 优于静默使用错误凭证
+    bucket-name: huashop
+    bucket-url: https://huashop.oss-cn-beijing.aliyuncs.com
+    base-path: kefu
 
 # aws s3 configuration (minio compatible)
 aws-s3:
@@ -273,13 +246,6 @@ cloudflare-r2:
     access-key-id: xxx_key_id
     secret-access-key: xxx_secret_key
 
-# huawei obs configuration
-hua-wei-obs:
-    path: you-path
-    bucket: you-bucket
-    endpoint: you-endpoint
-    access-key: you-access-key
-    secret-key: you-secret-key
 
 # excel configuration
 excel:
@@ -294,6 +260,28 @@ disk-list:
 cors:
     mode: strict-whitelist # 放行模式: allow-all, 放行全部; whitelist, 白名单模式, 来自白名单内域名的请求添加 cors 头; strict-whitelist 严格白名单模式, 白名单外的请求一律拒绝
     whitelist:
+        # 本机开发源: 浏览器对同源 POST 也带 Origin 头, vite 代理(8090/8091/8099等)透传后被 strict-whitelist 403, 故加 localhost 通配(对生产无影响)
+        - allow-origin: http://localhost:*
+          allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
+          allow-methods: POST, GET, OPTIONS, DELETE, PUT
+          expose-headers: Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, New-Token, New-Expires-At
+          allow-credentials: true
+        - allow-origin: http://127.0.0.1:*
+          allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
+          allow-methods: POST, GET, OPTIONS, DELETE, PUT
+          expose-headers: Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, New-Token, New-Expires-At
+          allow-credentials: true
+        # 生产直连前端源: 平台后台/商户后台/H5 按租户动态子域(kfadmin<hash>.laigoushangcheng.cn 等), 用通配符覆盖 http/https 两协议
+        - allow-origin: http://*.laigoushangcheng.cn
+          allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
+          allow-methods: POST, GET, OPTIONS, DELETE, PUT
+          expose-headers: Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, New-Token, New-Expires-At
+          allow-credentials: true
+        - allow-origin: https://*.laigoushangcheng.cn
+          allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
+          allow-methods: POST, GET, OPTIONS, DELETE, PUT
+          expose-headers: Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, New-Token, New-Expires-At
+          allow-credentials: true
         - allow-origin: example1.com
           allow-headers: Content-Type,AccessToken,X-CSRF-Token, Authorization, Token,X-Token,X-User-Id
           allow-methods: POST, GET

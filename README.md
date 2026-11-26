@@ -117,6 +117,7 @@ node scripts/bench_cs.mjs                 # 消息链路 QPS 压测（瓶颈定�
 - [docs/cs/test-report.md](docs/cs/test-report.md) —— 验收与 QPS 压测报告、瓶颈分析
 - [docs/cs/security-ratelimit.md](docs/cs/security-ratelimit.md) —— 安全与限流报告（令牌域/租户隔离/文件安全/限流总表/暴力破解防护与已知边界）
 - [docs/cs/sso-php.md](docs/cs/sso-php.md) —— 商户 SSO 免密进入的 PHP 加密对接文档（AES-256-GCM 规范/用例/自检）
+- [docs/cs/production-deploy.md](docs/cs/production-deploy.md) —— 生产部署手册（.env 集中配置、上线步骤、安全核对清单、运维与回滚）
 - [aiDoc/](aiDoc/README.md) —— 面向 AI 协作的模块规则、记忆与关系图谱
 
 ## 开发约定

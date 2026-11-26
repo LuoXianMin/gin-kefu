@@ -25,7 +25,7 @@ import (
 type AuthService struct{}
 
 var (
-	ErrLoginLocked   = errors.New("账号已锁定，请稍后重试")
+	ErrLoginLocked    = errors.New("账号已锁定，请稍后重试")
 	ErrTenantMismatch = errors.New("账号与租户不匹配")
 )
 

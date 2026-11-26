@@ -7,21 +7,21 @@ import (
 
 	"github.com/flipped-aurora/gin-vue-admin/server/global"
 	cs "github.com/flipped-aurora/gin-vue-admin/server/model/cs"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"go.uber.org/zap"
 )
 
 // ConversationService 会话接待用例(共享领域服务, 各端调用带独立鉴权)
 type ConversationService struct{}
 
 var (
-	ErrConvNotFound     = errors.New("会话不存在或无权访问")
-	ErrConvNotPending   = errors.New("会话已被接入或已结束")
-	ErrAgentAtCapacity  = errors.New("客服接待数已达上限")
-	ErrNotOwner         = errors.New("非本会话接待客服")
-	ErrTargetInvalid    = errors.New("转接目标客服无效")
-	ErrAlreadyFirst     = errors.New("会话正在接待中")
+	ErrConvNotFound    = errors.New("会话不存在或无权访问")
+	ErrConvNotPending  = errors.New("会话已被接入或已结束")
+	ErrAgentAtCapacity = errors.New("客服接待数已达上限")
+	ErrNotOwner        = errors.New("非本会话接待客服")
+	ErrTargetInvalid   = errors.New("转接目标客服无效")
+	ErrAlreadyFirst    = errors.New("会话正在接待中")
 )
 
 // CreateOrResume 用户登录后创建或恢复未结束会话(服务端建立成员关系)

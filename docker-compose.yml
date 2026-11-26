@@ -24,6 +24,13 @@ x-app-env: &app-env
   GVA_CS_SSO_KEY: ${GVA_CS_SSO_KEY:-} # SSO 免密进入 AES 密钥(真实值在 .env; 未配=SSO 接口自动禁用)
   GVA_SMS_AK: ${GVA_SMS_AK:-}           # 短信通道 AK(sms.provider=http 时必需)
   GVA_SMS_SK: ${GVA_SMS_SK:-}           # 短信通道 SK
+  GVA_SMS_PROVIDER: ${GVA_SMS_PROVIDER:-}       # 非空则覆盖 yaml sms.provider(log|http|aliyun)
+  GVA_SMS_ENDPOINT: ${GVA_SMS_ENDPOINT:-}       # http 模式短信网关地址; aliyun 留空用官方端点
+  GVA_SMS_SIGN_NAME: ${GVA_SMS_SIGN_NAME:-}     # 短信签名
+  GVA_SMS_TEMPLATE_CODE: ${GVA_SMS_TEMPLATE_CODE:-} # 短信模板 Code
+  GVA_SMS_TEMPLATE_PARAM_KEY: ${GVA_SMS_TEMPLATE_PARAM_KEY:-} # aliyun 模板验证码变量名, 留空=code
+  GVA_SMS_REGION: ${GVA_SMS_REGION:-}                # aliyun 短信地域, 留空=cn-hangzhou
+  GVA_SMS_DEV_RETURN_CODE: ${GVA_SMS_DEV_RETURN_CODE:-} # 生产必设 false(验证码回显=MFA 旁路); 未设置用 yaml 值
   GVA_JWT_SIGNING_KEY: ${GVA_JWT_SIGNING_KEY:-} # 非空则覆盖 yaml 的 jwt.signing-key(换钥=全员重登)
   GVA_DB_USERNAME: ${GVA_DB_USERNAME:-gva}
   GVA_DB_PASSWORD: ${GVA_DB_PASSWORD:-gva123}
@@ -33,6 +40,18 @@ x-app-env: &app-env
   GVA_MONGO_PASSWORD: ${GVA_MONGO_PASSWORD:-}
   GVA_OSS_ACCESS_KEY_ID: ${GVA_OSS_ACCESS_KEY_ID:-}     # 按 system.oss-type 覆盖对应 OSS 段的 AK/SK
   GVA_OSS_ACCESS_KEY_SECRET: ${GVA_OSS_ACCESS_KEY_SECRET:-}
+  # ---- 环境类型与策略开关(非敏感但生产/开发不同, 同样集中到 .env) ----
+  GIN_MODE: ${GIN_MODE:-debug}                    # 生产 release(关 gin 路由日志)
+  GVA_SYSTEM_ENV: ${GVA_SYSTEM_ENV:-}             # 非空覆盖 system.env; public=不回显图形码答案
+  GVA_DB_TYPE: ${GVA_DB_TYPE:-}                   # 非空覆盖 system.db-type
+  GVA_OSS_TYPE: ${GVA_OSS_TYPE:-}                 # 非空覆盖 system.oss-type(先于 AK/SK 生效)
+  GVA_ROUTER_PREFIX: ${GVA_ROUTER_PREFIX:-}
+  GVA_ZAP_LEVEL: ${GVA_ZAP_LEVEL:-}               # debug|info|warn|error
+  GVA_DISABLE_AUTO_MIGRATE: ${GVA_DISABLE_AUTO_MIGRATE:-} # 生产建议 true
+  GVA_SSO_MAX_AGE_SEC: ${GVA_SSO_MAX_AGE_SEC:-}   # SSO 链接时效(秒), 0/留空=不校验
+  GVA_OPEN_CAPTCHA: ${GVA_OPEN_CAPTCHA:-}         # 0=每次都要图形码
+  GVA_KAFKA_ENABLED: ${GVA_KAFKA_ENABLED:-}
+  GVA_KAFKA_BROKERS: ${GVA_KAFKA_BROKERS:-}       # 逗号分隔, 如 kafka1:9092,kafka2:9092
 
 services:
   # ---------------------------------------------------------------------------
@@ -46,7 +65,7 @@ services:
       - "15432:5432"
     environment:
       POSTGRES_USER: ${GVA_DB_USERNAME:-gva}
-      POSTGRES_PASSWORD: ${GVA_DB_PASSWORD:-gva123}
+      POSTGRES_PASSWORD: ${GVA_DB_PASSWORD:-gva123OYb1rcDmzA2FPDLqPep}
       POSTGRES_DB: ${GVA_DB_NAME:-gva}
       TZ: Asia/Shanghai
     healthcheck:
@@ -68,7 +87,7 @@ services:
     container_name: gva-redis
     restart: always
     ports:
-      - "16379:6379"
+      - "16378:6379"
     environment:
       GVA_REDIS_PASSWORD: ${GVA_REDIS_PASSWORD:-}
     command: sh -c 'exec redis-server --requirepass "$${GVA_REDIS_PASSWORD}"'
